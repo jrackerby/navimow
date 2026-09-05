@@ -1,0 +1,89 @@
+{
+  "config": {
+    "step": {
+      "pick_implementation": {
+        "title": "Sign in to Navimow"
+      },
+      "reauth_confirm": {
+        "title": "Sign in to Navimow again",
+        "description": "Navimow access tokens expire after a day or two and the account was issued no refresh token, so signing in again is the normal way to restore the connection."
+      }
+    },
+    "abort": {
+      "already_configured": "This Navimow account is already set up.",
+      "single_instance_allowed": "Only one Navimow account can be set up. A second one would share the same broker credentials and the two sessions would displace each other.",
+      "authorize_url_timeout": "Timed out generating the Navimow sign-in URL.",
+      "missing_configuration": "The Navimow integration is not configured.",
+      "no_url_available": "No URL available. Home Assistant needs an externally reachable URL to complete the Navimow sign-in.",
+      "oauth_error": "Navimow returned an invalid response.",
+      "oauth_failed": "Navimow did not complete the sign-in.",
+      "oauth_timeout": "Timed out completing the Navimow sign-in.",
+      "oauth_unauthorized": "Navimow rejected the sign-in.",
+      "reauth_successful": "Navimow was signed in again successfully.",
+      "user_rejected_authorize": "The Navimow sign-in was cancelled.",
+      "cannot_connect": "Signed in, but the Navimow cloud would not return the device list for this account.",
+      "no_devices": "Signed in successfully, but this Navimow account has no mowers on it."
+    },
+    "create_entry": {
+      "default": "Signed in to Navimow successfully."
+    }
+  },
+  "entity": {
+    "binary_sensor": {
+      "problem": {
+        "name": "Problem"
+      },
+      "connectivity": {
+        "name": "Cloud connectivity"
+      },
+      "charging": {
+        "name": "Charging"
+      }
+    },
+    "button": {
+      "stop": {
+        "name": "Stop"
+      }
+    },
+    "device_tracker": {
+      "tracker": {
+        "name": "Location"
+      }
+    },
+    "event": {
+      "events": {
+        "name": "Event",
+        "state_attributes": {
+          "event_type": {
+            "state": {
+              "error": "Error",
+              "warning": "Warning",
+              "info": "Information",
+              "other": "Other"
+            }
+          }
+        }
+      }
+    },
+    "sensor": {
+      "battery": {
+        "name": "Battery"
+      },
+      "signal_strength": {
+        "name": "Signal strength"
+      },
+      "error": {
+        "name": "Error code"
+      },
+      "raw_state": {
+        "name": "Reported state"
+      },
+      "mowing_time": {
+        "name": "Session mowing time"
+      },
+      "total_mowing_time": {
+        "name": "Total mowing time"
+      }
+    }
+  }
+}

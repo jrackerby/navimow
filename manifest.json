@@ -1,0 +1,20 @@
+{
+  "domain": "navimow",
+  "name": "Navimow",
+  "codeowners": [
+    "@jrackerby"
+  ],
+  "config_flow": true,
+  "dependencies": [
+    "application_credentials"
+  ],
+  "documentation": "https://github.com/jrackerby/HA/blob/master/custom_components/navimow/README.md",
+  "integration_type": "hub",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/jrackerby/HA/issues",
+  "requirements": [
+    "navimow-sdk>=0.1.2"
+  ],
+  "single_config_entry": true,
+  "version": "1.0.0"
+}

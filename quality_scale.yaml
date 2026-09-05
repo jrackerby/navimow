@@ -1,0 +1,123 @@
+# Integration Quality Scale self-assessment. LAW.md §15 makes this the build
+# standard; Bronze is the floor and Silver the target for anything reading a
+# device. The rule names below were read from ALL_RULES in home-assistant/core
+# script/hassfest/quality_scale.py, not from a remembered summary.
+#
+# THIS FILE IS NOT A GATE, AND SAYING SO IS THE POINT. hassfest's
+# validate_iqs_file() begins `if not integration.core: return`, so for a custom
+# integration nothing here is checked by anything. That is also why
+# manifest.json carries NO `quality_scale` key: the schema would accept
+# "silver" and no validator would ever test the claim, which is a confident
+# assertion with no gate behind it. Four rules below are honestly `todo`.
+# jrackerby/HA#541 carries them.
+
+rules:
+  # ---- BRONZE ----
+  action-setup:
+    status: exempt
+    comment: >-
+      No custom actions. NavimowHA registered set_blade_height, whose handler
+      unconditionally raised because the REST API has no such call -- a service
+      that always fails is worse than no service, so it is gone rather than
+      ported.
+  appropriate-polling:
+    status: done
+    comment: >-
+      State is MQTT push. The 15-minute coordinator interval refreshes the
+      OAuth token and drives the stale-push check; it is not a state poll.
+      NavimowHA ran it at 30s, i.e. 2,880 token refreshes a day.
+  brands:
+    status: todo
+    comment: >-
+      No accepted PR against home-assistant/brands for this domain. The vendor
+      repo ships brand artwork but that is not the same thing.
+  common-modules: { status: done, comment: coordinator.py and entity.py. }
+  config-flow: { status: done }
+  config-flow-test-coverage:
+    status: todo
+    comment: >-
+      tools/test_navimow_*.py cover model.py's pure judgement with no Home
+      Assistant install, matching this repo's tools-tests.yml convention. The
+      flow itself needs core's own test harness and is unexercised.
+  dependency-transparency:
+    status: todo
+    comment: >-
+      navimow-sdk is on PyPI and pinned >=0.1.2, but the rule also asks that it
+      be open source and built from source in CI. Its source is not published
+      anywhere we can read, so this is UNVERIFIED rather than met. It is also
+      the reason __init__.py annotates its one reach into sdk._mqtt.
+  docs-actions: { status: exempt, comment: No actions. }
+  docs-conditions: { status: exempt, comment: No conditions provided. }
+  docs-high-level-description: { status: done, comment: README.md. }
+  docs-installation-instructions: { status: done, comment: README.md. }
+  docs-removal-instructions: { status: done, comment: README.md. }
+  docs-triggers: { status: exempt, comment: No triggers provided. }
+  entity-event-setup:
+    status: done
+    comment: >-
+      event.py subscribes in async_added_to_hass and hands the unsubscribe to
+      async_on_remove. Nothing subscribes from __init__.
+  entity-unique-id:
+    status: done
+    comment: >-
+      And two of them are FROZEN. model.py's mower_unique_id/sensor_unique_id
+      re-emit NavimowHA's exact strings so the registry rows behind
+      lawn_mower.navimow_x430_2 and sensor.navimow_x430_battery_2 are reused.
+  has-entity-name: { status: done, comment: entity.py sets it once. }
+  runtime-data:
+    status: done
+    comment: NavimowRuntimeData on the entry; nothing in hass.data.
+  test-before-configure:
+    status: done
+    comment: >-
+      config_flow.async_oauth_create_entry calls authList with the freshly
+      issued token before an entry exists -- the channel the integration
+      actually uses, not just the login redirect. LAW.md §9.
+  test-before-setup:
+    status: done
+    comment: >-
+      async_setup_entry exercises REST then MQTT in the order it will use them
+      and raises ConfigEntryNotReady / ConfigEntryAuthFailed accordingly.
+  unique-config-entry:
+    status: done
+    comment: single_config_entry plus an explicit abort; two entries would flap one broker session.
+
+  # ---- SILVER ----
+  action-exceptions:
+    status: done
+    comment: Commands raise HomeAssistantError carrying the vendor's reason.
+  config-entry-unloading:
+    status: done
+    comment: >-
+      Platforms unloaded, MQTT disconnected in an executor, and the unloading
+      flag set BEFORE teardown so the disconnect callback does not race to
+      refresh credentials for a connection that is going away.
+  docs-configuration-parameters: { status: exempt, comment: No options flow. }
+  docs-installation-parameters: { status: done, comment: README.md. }
+  entity-unavailable:
+    status: done
+    comment: >-
+      entity.py splits "we cannot reach the cloud" (unavailable) from "the
+      cloud says the mower is offline" (a reading). The connectivity sensor is
+      the deliberate exception, because an entity that vanishes with its
+      subject cannot report the subject down.
+  integration-owner: { status: done, comment: codeowners @jrackerby. }
+  log-when-unavailable:
+    status: done
+    comment: >-
+      Once at the crossing and once on recovery, INFO, deduped on a stable
+      condition token rather than the rendered message, and armed only once HA
+      reaches RUNNING. LAW.md §15 carries all three halves of that.
+  parallel-updates:
+    status: done
+    comment: 1 on the command platforms, 0 on the read-only ones.
+  reauthentication-flow:
+    status: done
+    comment: >-
+      Load-bearing here rather than nice-to-have: the vendor issues no refresh
+      token and access tokens last a day or two, so re-auth is the normal end
+      of a session. NavimowHA had no reauth step at all.
+  test-coverage:
+    status: todo
+    comment: >-
+      Pure-model coverage only, per config-flow-test-coverage above.
