@@ -42,10 +42,14 @@ rules:
   dependency-transparency:
     status: todo
     comment: >-
-      navimow-sdk is on PyPI and pinned >=0.1.2, but the rule also asks that it
-      be open source and built from source in CI. Its source is not published
-      anywhere we can read, so this is UNVERIFIED rather than met. It is also
-      the reason __init__.py annotates its one reach into sdk._mqtt.
+      CORRECTED (GH-548). This previously said navimow-sdk's source "is not
+      published anywhere we can read", which was simply wrong -- it is at
+      github.com/segwaynavimow/navimow-sdk under GPL-3.0, and HEAD is
+      byte-identical to the shipped 0.1.2 wheel. Open source: yes. On PyPI,
+      version-pinned: yes. Still todo for the remaining half only: the repo
+      carries no CI at all, so nothing shows the published artefact was built
+      from that source. It is also the reason __init__.py annotates its one
+      reach into sdk._mqtt.
   docs-actions: { status: exempt, comment: No actions. }
   docs-conditions: { status: exempt, comment: No conditions provided. }
   docs-high-level-description: { status: done, comment: README.md. }

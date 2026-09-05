@@ -54,6 +54,37 @@ subscribes a third MQTT topic it never listened to:
   that can only fail still appears in the UI and in every automation picker.
   It is gone rather than ported.
 
+## What the cloud does not expose
+
+**There is no mowing schedule and no blade/service data on this API, and that
+is a property of the API rather than a gap in this component** (GH-548). The
+whole surface is five endpoints — `authList`, `getVehicleStatus`,
+`sendCommands`, `responseCommands`, `mqtt/userInfo/get/v2` — and its command
+vocabulary is Google Smart Home (`action.devices.commands.StartStop`,
+`PauseUnpause`, `Dock`), a schema with no mower schedule or service concept to
+carry. `segwaynavimow/navimow-sdk` at HEAD is byte-identical to the published
+0.1.2 wheel, and the independent `niddu85/home-assistant-navimow` reaches the
+same four `/openapi/smarthome/*` paths, so this is two implementations
+converging rather than one author missing an endpoint. Segway keeps blade life
+in the phone app instead, under Settings > MOWER > Maintenance & Tools > Part
+Maintenance, at roughly 80 hours.
+
+Two things are open rather than answered, and `diagnostics.py` is the
+instrument for the first:
+
+- The MQTT `attributes` channel (`/downlink/vehicle/<id>/realtimeDate/attributes`)
+  carries a free-form dict nobody has characterised. Diagnostics dumps it
+  whole and unfiltered for that reason — selecting keys would need us to
+  already know which ones matter. Download diagnostics after a real mowing
+  session to see what is actually on it.
+- Segway's published Open API is documented for the **X3 series Expansion
+  Bay**; this estate runs an X430 (X4 series). Whether it reaches X4 is
+  unverified — the vendor doc hosts are unreachable from a cloud session.
+
+`set_blade_height` is not implemented here, and the SDK's own version does not
+work either: it publishes to `navimow/<id>/command`, which does not match the
+broker's real `/downlink/vehicle/<id>/realtimeDate/*` scheme.
+
 ## Installation
 
 This component ships inside `jrackerby/HA` at
