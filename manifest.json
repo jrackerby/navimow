@@ -8,10 +8,10 @@
   "dependencies": [
     "application_credentials"
   ],
-  "documentation": "https://github.com/jrackerby/HA/blob/master/custom_components/navimow/README.md",
+  "documentation": "https://github.com/jrackerby/navimow",
   "integration_type": "hub",
   "iot_class": "cloud_push",
-  "issue_tracker": "https://github.com/jrackerby/HA/issues",
+  "issue_tracker": "https://github.com/jrackerby/navimow/issues",
   "requirements": [
     "navimow-sdk>=0.1.2"
   ],
