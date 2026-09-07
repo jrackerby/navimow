@@ -6,6 +6,7 @@ name: validate
 
 on:
   push:
+    branches: [master]
   pull_request:
   schedule:
     - cron: "0 7 * * 3"
@@ -14,9 +15,17 @@ on:
 env:
   DOMAIN: navimow
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.ref }}
+  cancel-in-progress: true
+
 jobs:
   hassfest:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       # Into a subdirectory ON PURPOSE -- the staging step below builds the
       # layout hassfest expects AT THE WORKSPACE ROOT and cannot do that if the
@@ -51,6 +60,7 @@ jobs:
 
   tests:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -73,6 +83,7 @@ jobs:
     # up on the live host after a restart. hassfest does not catch it either --
     # it validates the manifest and translations, never an import.
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -147,6 +158,7 @@ jobs:
 
   hacs:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@v4
 
