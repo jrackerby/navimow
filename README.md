@@ -87,9 +87,17 @@ broker's real `/downlink/vehicle/<id>/realtimeDate/*` scheme.
 
 ## Installation
 
-This component ships inside `jrackerby/HA` at
-`custom_components/navimow/`, so `git push ha master` deploys it. A
-`custom_components/` change needs a full Home Assistant restart —
+This repository is checked out as a **git submodule** of `jrackerby/HA` at
+`custom_components/navimow/`, so a change here ships in two steps: merge it
+onto this repo's `master`, then bump the submodule pointer in `jrackerby/HA`
+and `git push ha master`. The pointer must name a commit on **this repo's
+master**, never a PR branch head — this repo squash-merges, so a branch commit
+never becomes an ancestor of master, and the pointer would dangle the moment
+the branch is reaped.
+
+`git push ha master` lands the bumped pointer but does not fetch it: the host
+runs `git submodule update --init --recursive` itself. A `custom_components/`
+change then needs a full Home Assistant restart —
 `homeassistant.reload_core_config` does not re-import a custom component.
 
 1. Remove the NavimowHA custom repository from HACS **and delete its config
@@ -127,11 +135,24 @@ updates the existing entry rather than creating a second one.
 Three suites, run with neither Home Assistant nor the vendor SDK installed:
 
 ```
-python3 tools/test_navimow_model.py      # the activity/fault/reachability judgement
-python3 tools/test_navimow_migration.py  # the inherited unique_ids
-python3 tools/test_navimow_wiring.py     # platform, translation and credential gates
+./tools/run_tests.sh                 # all three
+python3 tests/test_model.py          # the activity/fault/reachability judgement
+python3 tests/test_migration.py      # the inherited unique_ids
+python3 tests/test_wiring.py         # platform, translation and credential gates
 ```
 
-They run as three steps in `.github/workflows/tools-tests.yml`. What they do
-**not** cover is stated in each file's docstring; `quality_scale.yaml` records
-which quality-scale rules are met and which four are still `todo`.
+They run as the `tests` job in `.github/workflows/validate.yml`, alongside a
+`hassfest` job and an `imports` job that installs the core version `hacs.json`
+declares support for and imports every module against it — which is the only
+gate that catches a `homeassistant.*` symbol moving, since the three suites
+above deliberately run with core absent.
+
+What they do **not** cover is stated in each file's docstring;
+`quality_scale.yaml` records which quality-scale rules are met and which four
+are still `todo`.
+
+One check did **not** move here: `jrackerby/HA`'s
+`tools/test_navimow_consumers.py` asserts that that repository's
+`custom_templates/net_tiers.jinja` still names `lawn_mower.navimow_x430_2`. Its
+subject is a file this repository does not contain, so moved here it would have
+found nothing and reported green having asserted nothing.
