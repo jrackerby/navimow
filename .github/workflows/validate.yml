@@ -1,0 +1,162 @@
+name: validate
+
+# Same posture as waste-collection's and household-state's: a repo that only
+# validates on push goes quietly stale between commits, and these repos sit
+# untouched for months.
+
+on:
+  push:
+  pull_request:
+  schedule:
+    - cron: "0 7 * * 3"
+  workflow_dispatch:
+
+env:
+  DOMAIN: navimow
+
+jobs:
+  hassfest:
+    runs-on: ubuntu-latest
+    steps:
+      # Into a subdirectory ON PURPOSE -- the staging step below builds the
+      # layout hassfest expects AT THE WORKSPACE ROOT and cannot do that if the
+      # repo is already checked out there.
+      - uses: actions/checkout@v4
+        with:
+          path: src
+
+      # home-assistant/actions/hassfest takes no path input: it scans
+      # custom_components/* under the workspace. This repo keeps the
+      # integration at its ROOT (hacs.json content_in_root) because
+      # jrackerby/HA submodules it AS custom_components/navimow.
+      - name: stage the custom_components layout hassfest scans
+        run: |
+          set -euo pipefail
+          mkdir -p "custom_components/$DOMAIN"
+          cp -a src/. "custom_components/$DOMAIN/"
+          rm -rf "custom_components/$DOMAIN/.git" \
+                 "custom_components/$DOMAIN/.github" \
+                 "custom_components/$DOMAIN/tests" \
+                 "custom_components/$DOMAIN/tools"
+          test -f "custom_components/$DOMAIN/manifest.json" \
+            || { echo "CANNOT RUN: staging produced no manifest.json -- hassfest would pass vacuously"; exit 1; }
+          echo "staged $(find "custom_components/$DOMAIN" -type f | wc -l) files"
+
+      # What this does NOT do, so nobody reads more into a green run than is
+      # there: hassfest's validate_iqs_file opens with `if not integration.core:
+      # return`, so quality_scale.yaml goes unread for a custom component while
+      # the manifest schema still ACCEPTS a quality_scale key. A tier declared
+      # there is a self-claim with no gate behind it (jrackerby/HA LAW 15).
+      - uses: home-assistant/actions/hassfest@master
+
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      # NO homeassistant install here, and no vendor SDK either. model.py
+      # imports neither, and the other two suites parse the source by AST and
+      # by text rather than importing it -- which is why a red result here is
+      # attributable to a decision in this repo rather than to a core release
+      # or a navimow-sdk bump moving underneath it. The imports job below is
+      # where real core has its say.
+      - name: run every suite
+        run: ./tools/run_tests.sh
+
+  imports:
+    # The gate the pure-layer suites above cannot be: every module except
+    # model.py imports `homeassistant`, so a symbol that moved or was removed
+    # is invisible to them and first shows up as the component failing to set
+    # up on the live host after a restart. hassfest does not catch it either --
+    # it validates the manifest and translations, never an import.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 3.14, NOT 3.13. Home Assistant 2026.x declares
+          # Requires-Python >=3.14.2, so on 3.13 pip silently FILTERS OUT every
+          # 2026 release and then reports "no matching distribution" for a
+          # version that plainly exists -- which reads as a bad pin rather than
+          # a wrong interpreter.
+          python-version: "3.14"
+
+      # Pinned to the floor hacs.json declares, not to latest: this asserts the
+      # integration imports on the OLDEST core it claims to support. A newer
+      # core that also works is not what the claim says.
+      - name: install the core version hacs.json claims support for
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          import sys
+          need = (3, 14, 2)
+          if sys.version_info[:3] < need:
+              raise SystemExit(
+                  f"CANNOT RUN: Home Assistant 2026.x needs Python >= {'.'.join(map(str, need))}, "
+                  f"this runner has {sys.version.split()[0]} -- pip would filter every 2026 "
+                  "release and report a misleading 'no matching distribution'"
+              )
+          print(f"python {sys.version.split()[0]} satisfies core's Requires-Python")
+          PY
+          FLOOR="$(python -c 'import json;print(json.load(open("hacs.json"))["homeassistant"])')"
+          echo "hacs.json floor: $FLOOR"
+          pip install "homeassistant==$FLOOR"
+
+      # Derived from manifest.json, never listed here -- a second copy of this
+      # set in a workflow file is a copy that goes stale silently.
+      - name: install the requirements manifest.json declares
+        run: |
+          set -euo pipefail
+          REQS="$(python -c 'import json;print("\n".join(json.load(open("manifest.json")).get("requirements", [])))')"
+          echo "manifest requirements:"; echo "$REQS"
+          test -n "$REQS" || { echo "CANNOT RUN: manifest declares no requirements, but this component has always had at least one -- the parse, not the manifest, is probably wrong"; exit 1; }
+          echo "$REQS" | xargs -r pip install
+
+      - name: import every module against real core
+        run: |
+          set -euo pipefail
+          mkdir -p "stage/custom_components/$DOMAIN"
+          cp -a ./*.py "stage/custom_components/$DOMAIN/"
+          cp -a manifest.json translations strings.json "stage/custom_components/$DOMAIN/"
+          touch stage/custom_components/__init__.py
+          cd stage
+          MODULES=$(cd "custom_components/$DOMAIN" && ls ./*.py | sed 's#^\./##;s/\.py$//' | grep -v '^__init__$')
+          echo "modules: $MODULES"
+          test -n "$MODULES" \
+            || { echo "CANNOT RUN: no modules staged -- this would pass vacuously"; exit 1; }
+          python - <<PY
+          import importlib, sys
+          sys.path.insert(0, ".")
+          mods = """$MODULES""".split()
+          failed = []
+          for m in ["__init__", *mods]:
+              name = f"custom_components.$DOMAIN.{m}" if m != "__init__" else "custom_components.$DOMAIN"
+              try:
+                  importlib.import_module(name)
+                  print(f"  ok   {name}")
+              except Exception as exc:
+                  failed.append((name, exc))
+                  print(f"  FAIL {name}: {type(exc).__name__}: {exc}")
+          if failed:
+              sys.exit(f"{len(failed)} module(s) failed to import against real core")
+          print(f"imported {len(mods) + 1} modules cleanly")
+          PY
+
+  hacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # VOID -- NOT A PASS, AND NOT A FAILURE OF THIS REPO. HACS fetches
+      # hacs.json and manifest.json from raw.githubusercontent.com with NO
+      # Authorization header, in CI and in a live install alike, so a private
+      # repository 404s. Reporting it VOID keeps the distinction that matters:
+      # the check did not run, so nothing was proven either way. jrackerby/HA#483.
+      - name: VOID -- HACS validation cannot run against a private repository
+        if: ${{ github.event.repository.private }}
+        run: |
+          echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
+          echo "See jrackerby/HA#483. This is a VOID, not a pass."
