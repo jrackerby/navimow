@@ -57,7 +57,7 @@ subscribes a third MQTT topic it never listened to:
 ## What the cloud does not expose
 
 **There is no mowing schedule and no blade/service data on this API, and that
-is a property of the API rather than a gap in this component** (GH-548). The
+is a property of the API rather than a gap in this component.** The
 whole surface is five endpoints — `authList`, `getVehicleStatus`,
 `sendCommands`, `responseCommands`, `mqtt/userInfo/get/v2` — and its command
 vocabulary is Google Smart Home (`action.devices.commands.StartStop`,
@@ -87,18 +87,30 @@ broker's real `/downlink/vehicle/<id>/realtimeDate/*` scheme.
 
 ## Installation
 
-This repository is checked out as a **git submodule** of `jrackerby/HA` at
-`custom_components/navimow/`, so a change here ships in two steps: merge it
-onto this repo's `master`, then bump the submodule pointer in `jrackerby/HA`
-and `git push ha master`. The pointer must name a commit on **this repo's
-master**, never a PR branch head — this repo squash-merges, so a branch commit
-never becomes an ancestor of master, and the pointer would dangle the moment
-the branch is reaped.
+### HACS
 
-`git push ha master` lands the bumped pointer but does not fetch it: the host
-runs `git submodule update --init --recursive` itself. A `custom_components/`
-change then needs a full Home Assistant restart —
-`homeassistant.reload_core_config` does not re-import a custom component.
+1. In Home Assistant: **HACS → ⋮ → Custom repositories**.
+2. Add `https://github.com/jrackerby/navimow` with category **Integration**.
+3. Install **Navimow**, then restart Home Assistant.
+4. **Settings → Devices & Services → Add Integration → "Navimow"**.
+
+### Manual
+
+The integration lives at the repository **root**, not under
+`custom_components/` — `hacs.json` declares `content_in_root: true`. To install
+by hand, copy this repository's contents into
+`config/custom_components/navimow/` and restart Home Assistant.
+
+Either way a `custom_components/` change needs a **full Home Assistant
+restart**; `homeassistant.reload_core_config` does not re-import a custom
+component.
+
+### Migrating from NavimowHA
+
+This integration takes over the `navimow` domain from
+[`segwaynavimow/NavimowHA`](https://github.com/segwaynavimow/NavimowHA) and
+re-emits its `unique_id` strings, so entity ids and their history survive the
+swap. Before installing:
 
 1. Remove the NavimowHA custom repository from HACS **and delete its config
    entry** first. Two integrations on the same domain cannot both load, and
@@ -150,9 +162,3 @@ above deliberately run with core absent.
 What they do **not** cover is stated in each file's docstring;
 `quality_scale.yaml` records which quality-scale rules are met and which four
 are still `todo`.
-
-One check did **not** move here: `jrackerby/HA`'s
-`tools/test_navimow_consumers.py` asserts that that repository's
-`custom_templates/net_tiers.jinja` still names `lawn_mower.navimow_x430_2`. Its
-subject is a file this repository does not contain, so moved here it would have
-found nothing and reported green having asserted nothing.
