@@ -78,8 +78,8 @@ instrument for the first:
   already know which ones matter. Download diagnostics after a real mowing
   session to see what is actually on it.
 - Segway's published Open API is documented for the **X3 series Expansion
-  Bay**; this estate runs an X430 (X4 series). Whether it reaches X4 is
-  unverified — the vendor doc hosts are unreachable from a cloud session.
+  Bay**; this was developed against an X430 (X4 series). Whether it reaches X4
+  is unverified.
 
 `set_blade_height` is not implemented here, and the SDK's own version does not
 work either: it publishes to `navimow/<id>/command`, which does not match the
