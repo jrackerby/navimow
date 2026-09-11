@@ -238,24 +238,59 @@ def mqtt_endpoint(mqtt_info: dict) -> tuple[str | None, int, str | None]:
     host = mqtt_info.get("mqttHost")
     # A host with no scheme is the only thing that may be used as a hostname.
     bare_host = host if host and "://" not in host else None
-    candidate = mqtt_info.get("mqttUrl") or host
-    if not candidate:
-        return bare_host, 1883, None
 
-    parsed = _urlparse(candidate)
-    if parsed[0] not in ("ws", "wss"):
-        # Not a websocket endpoint. Fall back to plain MQTT, but ONLY on a
-        # host we can actually hand to a TCP connect.
-        return bare_host, 1883, None
+    # EVERY FIELD THAT COULD CARRY ONE IS TRIED, AND A FIELD THAT DOES NOT
+    # YIELD ONE IS SKIPPED RATHER THAN FATAL. This loop replaces a version
+    # that picked `mqttUrl` when present and gave up if it was not a websocket
+    # URL -- which on the live descriptor returned no broker at all and put the
+    # entry into setup_retry, because this cloud sends BOTH: an `mqttUrl` that
+    # is not a ws/wss URL, and an `mqttHost` that is. Preferring either field
+    # unconditionally gets one of the two real payloads wrong.
+    for candidate in (mqtt_info.get("mqttUrl"), host):
+        if not candidate:
+            continue
+        scheme, hostname, url_port, path, query = _urlparse(candidate)
+        if scheme not in ("ws", "wss") or not hostname:
+            continue
+        port = url_port or (443 if scheme == "wss" else 80)
+        if query:
+            path = f"{path}?{query}"
+        # Prefer a clean mqttHost when there is one; fall back to the hostname
+        # the URL carried. Preferring mqttHost unconditionally is what produced
+        # the `wss://`-prefixed broker handed to a TCP connect.
+        return bare_host or hostname, port, path or "/"
 
-    scheme, hostname, url_port, path, query = parsed
-    port = url_port or (443 if scheme == "wss" else 80)
-    if query:
-        path = f"{path}?{query}"
-    # Prefer a clean mqttHost when there is one; fall back to the hostname the
-    # URL carried. Preferring mqttHost unconditionally is what produced the
-    # `wss://`-prefixed broker above.
-    return bare_host or hostname, port, path or "/"
+    # No websocket endpoint in any field. Plain MQTT, but ONLY on a host we can
+    # actually hand to a TCP connect -- never a scheme-bearing string.
+    return bare_host, 1883, None
+
+
+def mqtt_descriptor_shape(mqtt_info: dict) -> dict:
+    """Describe the cloud's MQTT descriptor WITHOUT revealing any value.
+
+    THIS EXISTS BECAUSE NOT HAVING IT COST A ROLLBACK. The endpoint resolver
+    was corrected against descriptor shapes that were reasoned about rather
+    than read -- the live payload was never visible anywhere, because every
+    field that carries it sits beside `userName` and `pwdInfo` and the whole
+    dict was therefore never dumped. The corrected resolver was right about
+    the shape it was shown and wrong about the one the cloud actually sends,
+    setup went to setup_retry on the live instance, and it had to be reverted.
+
+    Key NAMES and URL SCHEMES are not credentials. Publishing those two makes
+    the payload's shape readable from a diagnostics dump, which is the read
+    that should have preceded the fix.
+    """
+    keys = sorted(str(k) for k in mqtt_info)
+    schemes = {}
+    for field in ("mqttUrl", "mqttHost"):
+        value = mqtt_info.get(field)
+        if not value:
+            continue
+        scheme = _urlparse(value)[0]
+        # "" means the field is present and carries no scheme at all -- a bare
+        # hostname. That is a different finding from the field being absent.
+        schemes[field] = scheme or ""
+    return {"keys": keys, "schemes": schemes}
 
 
 def _urlparse(value: str) -> tuple[str | None, str | None, int | None, str, str]:

@@ -42,7 +42,7 @@ from .const import (
     MQTT_RECONNECT_MIN_DELAY,
     PLATFORMS,
 )
-from .model import mqtt_endpoint
+from .model import mqtt_descriptor_shape, mqtt_endpoint
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -64,6 +64,8 @@ class NavimowRuntimeData:
     mqtt_broker: str | None = None
     mqtt_port: int | None = None
     mqtt_transport: str | None = None
+    # Key names and URL schemes only -- never a value. model.py says why.
+    mqtt_descriptor: dict | None = None
 
 
 NavimowConfigEntry = ConfigEntry[NavimowRuntimeData]
@@ -151,6 +153,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
         mqtt_broker=broker,
         mqtt_port=port,
         mqtt_transport="websocket" if ws_path else "tcp",
+        mqtt_descriptor=mqtt_descriptor_shape(mqtt_info),
     )
 
     def _build_sdk() -> Any:

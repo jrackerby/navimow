@@ -83,13 +83,25 @@ instrument for the first:
   publishes nothing, which produces a dump identical to a dead broker session;
   those two have opposite fixes. **The first dump carrying those keys found a
   real one**: `mqtt/userInfo/get/v2` returns the whole endpoint in `mqttHost`
-  (`wss://mqtt-fra.navimow.com`) with no `mqttUrl`, and the resolver had been
-  handing that string to paho as a TCP hostname on 1883. It cannot resolve,
-  `connect_async` never raises, so setup reported ready and the push channel
-  was never connected once — every entity was quietly running on the HTTP
-  fallback. `model.mqtt_endpoint` now parses the scheme wherever it is
-  written, and refuses rather than passing a scheme-bearing string through as
-  a host. Note also that `entry` still stores
+  (`wss://mqtt-fra.navimow.com`) **and** an `mqttUrl` that is not a websocket
+  URL, and the resolver had been handing the host string to paho as a TCP
+  hostname on 1883. It cannot resolve, `connect_async` never raises, so setup
+  reported ready and the push channel was never connected once — every entity
+  was quietly running on the HTTP fallback. `model.mqtt_endpoint` now tries
+  every field that could carry an endpoint, takes the first that yields a
+  `ws`/`wss` one, and refuses rather than passing a scheme-bearing string
+  through as a host.
+
+  **Do not install v1.2.0.** It fixed the host but let the non-websocket
+  `mqttUrl` veto the websocket `mqttHost`, so it resolved no broker at all and
+  put the entry into `setup_retry`; v1.2.1 supersedes it. The lesson is in
+  `mqtt_descriptor_shape`: that resolver was corrected against descriptor
+  shapes that were reasoned about rather than read, because every field
+  carrying one sits beside `userName`/`pwdInfo` and so was never dumped. The
+  dump now carries `mqtt.descriptor` — key names and URL schemes, never a
+  value — so the payload's shape is a read rather than a guess.
+
+  Note also that `entry` still stores
   NavimowHA's `mqtt_username` / `mqtt_password` / `mqtt_broker` keys on an
   upgraded installation — this integration reads none of them and re-resolves
   the broker and its credentials from `mqtt/userInfo/get/v2` on every setup,

@@ -213,6 +213,56 @@ def test_a_scheme_bearing_host_is_never_used_as_a_hostname():
     check(ws_path == "/", f"wss must carry a ws_path, got {ws_path!r}")
 
 
+def test_a_non_websocket_mqtt_url_does_not_veto_a_websocket_host():
+    """THE ROLLBACK CASE. This shape reached production and broke setup.
+
+    The live cloud sends BOTH: an `mqttUrl` that is not a ws/wss URL, and an
+    `mqttHost` that is. A resolver that picks mqttUrl when present and gives
+    up when it is not a websocket URL returns no broker at all -- which raises
+    ConfigEntryNotReady("returned no MQTT broker address"), put the entry into
+    setup_retry on the live instance, and had to be reverted.
+
+    Preferring EITHER field unconditionally gets one of the two real payloads
+    wrong, so every field is tried and one that yields nothing is skipped
+    rather than fatal.
+    """
+    for descriptor, why in (
+        ({"mqttUrl": "mqtt://mqtt-fra.navimow.com:1883",
+          "mqttHost": "wss://mqtt-fra.navimow.com"}, "a non-ws mqttUrl"),
+        ({"mqttUrl": "mqtt-fra.navimow.com:443",
+          "mqttHost": "wss://mqtt-fra.navimow.com"}, "an mqttUrl with no scheme"),
+    ):
+        broker, port, ws_path = m.mqtt_endpoint(descriptor)
+        check(broker == "mqtt-fra.navimow.com",
+              f"{why} beside a wss mqttHost resolved broker {broker!r}; it must "
+              "fall through to the host, not veto it -- this exact shape went "
+              "to setup_retry in production")
+        check(port == 443 and ws_path == "/",
+              f"{why}: resolved port={port} ws_path={ws_path!r}, not 443 and '/'")
+
+
+def test_the_descriptor_shape_reveals_no_value():
+    """Key names and schemes are publishable; values never are. This is what
+    makes the payload readable from a dump instead of reasoned about."""
+    shape = m.mqtt_descriptor_shape({
+        "mqttUrl": "mqtt://h:1883", "mqttHost": "wss://h",
+        "userName": "a-real-username", "pwdInfo": "a-real-password",
+    })
+    check(shape["keys"] == ["mqttHost", "mqttUrl", "pwdInfo", "userName"],
+          f"descriptor keys are {shape['keys']!r}")
+    check(shape["schemes"] == {"mqttUrl": "mqtt", "mqttHost": "wss"},
+          f"descriptor schemes are {shape['schemes']!r}")
+    blob = repr(shape)
+    for secret in ("a-real-username", "a-real-password", "h:1883"):
+        check(secret not in blob,
+              f"the descriptor shape leaked {secret!r} -- it may carry names "
+              "and schemes only")
+    # Present-but-bare is a finding, and must not read as absent.
+    check(m.mqtt_descriptor_shape({"mqttHost": "plain.example"})["schemes"]
+          == {"mqttHost": ""},
+          "a scheme-less host does not report as present-with-no-scheme")
+
+
 def test_a_clean_host_still_takes_the_plain_mqtt_path():
     """The fix must not convert every install to websockets. A host with no
     scheme is a hostname and still means plain MQTT on 1883."""

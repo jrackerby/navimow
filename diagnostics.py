@@ -118,6 +118,11 @@ async def async_get_config_entry_diagnostics(
             "broker": runtime.mqtt_broker,
             "port": runtime.mqtt_port,
             "transport": runtime.mqtt_transport,
+            # WHAT THE CLOUD ACTUALLY SENT, in the only form that is safe to
+            # print: key names and URL schemes, never a value. The endpoint
+            # resolver was once corrected against a descriptor shape nobody
+            # had read, and the correction was wrong about the real one.
+            "descriptor": runtime.mqtt_descriptor,
         },
         "devices": devices,
     }
