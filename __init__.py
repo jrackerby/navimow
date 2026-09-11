@@ -19,7 +19,6 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, field
 from typing import Any
-from urllib.parse import urlparse
 
 from homeassistant.components.application_credentials import (
     ClientCredential,
@@ -43,6 +42,7 @@ from .const import (
     MQTT_RECONNECT_MIN_DELAY,
     PLATFORMS,
 )
+from .model import mqtt_endpoint
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -134,7 +134,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
     except MowerAPIError as err:
         raise ConfigEntryNotReady(f"Navimow MQTT credentials unavailable: {err}") from err
 
-    broker, port, ws_path = _mqtt_endpoint(mqtt_info)
+    broker, port, ws_path = mqtt_endpoint(mqtt_info)
     if not broker:
         raise ConfigEntryNotReady("Navimow returned no MQTT broker address")
 
@@ -210,31 +210,6 @@ async def async_unload_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> 
         except Exception as err:  # noqa: BLE001
             _LOGGER.debug("Navimow MQTT disconnect raised on unload: %s", err)
     return unloaded
-
-
-def _mqtt_endpoint(mqtt_info: dict[str, Any]) -> tuple[str | None, int, str | None]:
-    """Resolve broker/port/ws_path from the cloud's MQTT descriptor.
-
-    NO DEFAULT BROKER. NavimowHA fell back to a constant `mqtt.navimow.com`
-    carrying its own `TODO: needs the actual address` comment, so a malformed
-    response produced a connection attempt against a hostname nobody had
-    verified rather than a setup failure naming the real problem.
-    """
-    mqtt_url = mqtt_info.get("mqttUrl")
-    host = mqtt_info.get("mqttHost")
-    if not mqtt_url:
-        return host, 1883, None
-
-    parsed = urlparse(mqtt_url)
-    if parsed.scheme not in ("ws", "wss"):
-        return host, 1883, None
-
-    host = host or parsed.hostname
-    port = parsed.port or (443 if parsed.scheme == "wss" else 80)
-    path = parsed.path or "/"
-    if parsed.query:
-        path = f"{path}?{parsed.query}"
-    return host, port, path
 
 
 def _install_credential_refresh(

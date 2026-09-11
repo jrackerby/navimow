@@ -189,6 +189,66 @@ def test_event_bucket_is_total_and_declared():
 
 # -- the suite's own falsifiability -------------------------------
 
+def test_a_scheme_bearing_host_is_never_used_as_a_hostname():
+    """THE LIVE DEFECT. Measured on an X430 through the estate's own instance.
+
+    mqtt/userInfo/get/v2 returned `mqttHost` = "wss://mqtt-fra.navimow.com"
+    and no `mqttUrl` at all. The resolver handed that back unchanged as a bare
+    hostname on 1883 with no ws_path, so paho was asked for a TCP connection
+    to a name containing "wss://" -- which cannot resolve, and which
+    connect_async never raises about. Setup reported ready, every entity came
+    up on the HTTP fallback, and the push channel was never connected once.
+
+    Diagnostics read `connected: false`, `broker: wss://mqtt-fra.navimow.com`,
+    `transport: tcp`, `seconds_since_mqtt_push: null` -- which is how it was
+    finally found, and why it could not be found before those keys existed.
+    """
+    broker, port, ws_path = m.mqtt_endpoint({"mqttHost": "wss://mqtt-fra.navimow.com"})
+    check(broker == "mqtt-fra.navimow.com",
+          f"broker is {broker!r}; a scheme-bearing host must be parsed, never "
+          "passed to a TCP connect as-is")
+    check("://" not in (broker or ""),
+          f"broker {broker!r} still carries a URL scheme -- this is the defect")
+    check(port == 443, f"wss must resolve to 443, got {port}")
+    check(ws_path == "/", f"wss must carry a ws_path, got {ws_path!r}")
+
+
+def test_a_clean_host_still_takes_the_plain_mqtt_path():
+    """The fix must not convert every install to websockets. A host with no
+    scheme is a hostname and still means plain MQTT on 1883."""
+    check(m.mqtt_endpoint({"mqttHost": "mqtt.navimow.com"})
+          == ("mqtt.navimow.com", 1883, None),
+          "a bare mqttHost no longer resolves to plain MQTT on 1883")
+
+
+def test_mqtt_url_still_wins_and_keeps_its_query():
+    """ws_path carries the query when there is one: the vendor signs the
+    websocket upgrade through it, so dropping it authenticates nothing."""
+    check(m.mqtt_endpoint({"mqttUrl": "wss://a.example/mqtt?token=x",
+                           "mqttHost": "a.example"})
+          == ("a.example", 443, "/mqtt?token=x"),
+          "mqttUrl no longer resolves, or its query was dropped")
+    check(m.mqtt_endpoint({"mqttUrl": "ws://b.example:8083/mqtt"})
+          == ("b.example", 8083, "/mqtt"),
+          "an explicit ws port is not being honoured")
+
+
+def test_an_unusable_descriptor_refuses_rather_than_guessing():
+    """NO DEFAULT BROKER, and no scheme-bearing string smuggled through as a
+    host either. Returning no broker is what raises ConfigEntryNotReady
+    naming the real problem; NavimowHA's constant fallback is the
+    counter-example."""
+    for descriptor, why in (
+        ({}, "an empty descriptor"),
+        ({"mqttHost": "tcp://c.example"}, "a non-websocket scheme"),
+        ({"mqttUrl": "mqtt://d.example"}, "a non-websocket mqttUrl"),
+    ):
+        broker, _, _ = m.mqtt_endpoint(descriptor)
+        check(broker is None,
+              f"{why} resolved to broker {broker!r} instead of refusing; "
+              "setup would connect somewhere nobody verified")
+
+
 def test_the_assertions_can_fail():
     """Every assertion set needs a self-test proving it CAN fail.
 
@@ -217,6 +277,27 @@ def test_the_assertions_can_fail():
     # Prove the restore worked, or every test after this one is meaningless.
     if m.resolve_activity("unknown") is not None:
         FAILURES.append("SELF-TEST FAILED: could not restore CANONICAL_TO_ACTIVITY")
+
+    # And the endpoint gate: reintroduce the live defect -- hand the host
+    # back untouched -- and assert the check notices. A gate over a resolver
+    # that quietly started returning its input would otherwise read green.
+    before = len(FAILURES)
+    original = m.mqtt_endpoint
+    try:
+        m.mqtt_endpoint = lambda info: (info.get("mqttHost"), 1883, None)
+        test_a_scheme_bearing_host_is_never_used_as_a_hostname()
+        if len(FAILURES) == before:
+            FAILURES.append(
+                "SELF-TEST FAILED: reinstating the pass-the-host-through "
+                "resolver produced NO failure, so the endpoint gate cannot "
+                "detect the defect it was written for"
+            )
+        else:
+            del FAILURES[before:]
+    finally:
+        m.mqtt_endpoint = original
+    if m.mqtt_endpoint({"mqttHost": "wss://x.example"})[0] != "x.example":
+        FAILURES.append("SELF-TEST FAILED: could not restore mqtt_endpoint")
 
 
 def main():

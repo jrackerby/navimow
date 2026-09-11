@@ -206,3 +206,79 @@ def event_bucket(level: str | None, event: str | None) -> str:
     if event and str(event).strip().lower().startswith("error"):
         return "error"
     return "other"
+
+
+# --------------------------------------------------------------------------
+# MQTT endpoint
+# --------------------------------------------------------------------------
+
+
+def mqtt_endpoint(mqtt_info: dict) -> tuple[str | None, int, str | None]:
+    """Resolve (broker, port, ws_path) from the cloud's MQTT descriptor.
+
+    NO DEFAULT BROKER. NavimowHA fell back to a constant `mqtt.navimow.com`
+    carrying its own `TODO: needs the actual address` comment, so a malformed
+    response produced a connection attempt against a hostname nobody had
+    verified rather than a setup failure naming the real problem.
+
+    A HOST FIELD MAY CARRY A WHOLE URL, AND TAKING IT LITERALLY IS SILENT.
+    Observed live on an X430: `mqttHost` was `wss://mqtt-fra.navimow.com` and
+    no `mqttUrl` came back at all. The earlier resolver returned that string
+    unchanged as a bare hostname with port 1883 and no ws_path, so paho was
+    asked for a TCP connection to a name containing `wss://`, which cannot
+    resolve. Nothing raised: `connect_async` retries in the background, so
+    setup reported ready, every entity came up on the HTTP fallback, and the
+    push channel was never once connected. It read as a quiet mower rather
+    than as a broken endpoint, which is why the diagnostics dump needed
+    `mqtt.connected` before this was findable at all.
+
+    So the scheme decides, wherever it is written. A field carrying one is
+    parsed; only a field carrying none is treated as a hostname.
+    """
+    host = mqtt_info.get("mqttHost")
+    # A host with no scheme is the only thing that may be used as a hostname.
+    bare_host = host if host and "://" not in host else None
+    candidate = mqtt_info.get("mqttUrl") or host
+    if not candidate:
+        return bare_host, 1883, None
+
+    parsed = _urlparse(candidate)
+    if parsed[0] not in ("ws", "wss"):
+        # Not a websocket endpoint. Fall back to plain MQTT, but ONLY on a
+        # host we can actually hand to a TCP connect.
+        return bare_host, 1883, None
+
+    scheme, hostname, url_port, path, query = parsed
+    port = url_port or (443 if scheme == "wss" else 80)
+    if query:
+        path = f"{path}?{query}"
+    # Prefer a clean mqttHost when there is one; fall back to the hostname the
+    # URL carried. Preferring mqttHost unconditionally is what produced the
+    # `wss://`-prefixed broker above.
+    return bare_host or hostname, port, path or "/"
+
+
+def _urlparse(value: str) -> tuple[str | None, str | None, int | None, str, str]:
+    """Minimal URL split, so model.py keeps importing nothing.
+
+    Returns (scheme, hostname, port, path, query). Only the shapes this
+    descriptor actually produces are handled -- scheme://host[:port][/path][?q]
+    -- and anything else falls out as a null scheme, which the caller treats
+    as "not a websocket endpoint" rather than guessing.
+    """
+    text = str(value)
+    if "://" not in text:
+        return None, None, None, "", ""
+    scheme, _, rest = text.partition("://")
+    scheme = scheme.strip().lower()
+    authority, slash, remainder = rest.partition("/")
+    path = f"{slash}{remainder}" if slash else ""
+    path, _, query = path.partition("?")
+    # Strip userinfo, then split an optional port off the host.
+    authority = authority.rpartition("@")[2]
+    port: int | None = None
+    if ":" in authority and not authority.endswith("]"):
+        maybe_host, _, maybe_port = authority.rpartition(":")
+        if maybe_port.isdigit():
+            authority, port = maybe_host, int(maybe_port)
+    return scheme, (authority or None), port, path, query
