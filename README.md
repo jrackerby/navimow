@@ -81,7 +81,15 @@ instrument for the first:
   Read the dump's `mqtt.connected` and `seconds_since_mqtt_push` before
   concluding anything from an empty `attributes`. A docked mower sleeps and
   publishes nothing, which produces a dump identical to a dead broker session;
-  those two have opposite fixes. Note also that `entry` still stores
+  those two have opposite fixes. **The first dump carrying those keys found a
+  real one**: `mqtt/userInfo/get/v2` returns the whole endpoint in `mqttHost`
+  (`wss://mqtt-fra.navimow.com`) with no `mqttUrl`, and the resolver had been
+  handing that string to paho as a TCP hostname on 1883. It cannot resolve,
+  `connect_async` never raises, so setup reported ready and the push channel
+  was never connected once — every entity was quietly running on the HTTP
+  fallback. `model.mqtt_endpoint` now parses the scheme wherever it is
+  written, and refuses rather than passing a scheme-bearing string through as
+  a host. Note also that `entry` still stores
   NavimowHA's `mqtt_username` / `mqtt_password` / `mqtt_broker` keys on an
   upgraded installation — this integration reads none of them and re-resolves
   the broker and its credentials from `mqtt/userInfo/get/v2` on every setup,
