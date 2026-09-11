@@ -10,8 +10,8 @@ There are two different failures and NavimowHA answered them with one value:
 
   * The cloud CAN be reached and reports that the mower is offline. That is a
     READING. An entity that goes unavailable here cannot report it, which is
-    the failure mode LAW.md §11 names -- a monitor that disappears with its
-    subject cannot say the subject is down -- and it is why
+    the failure mode to refuse -- a monitor that disappears with its subject
+    cannot say the subject is down -- and it is why
     binary_sensor.<name>_connectivity in particular must stay available and
     read `off` rather than vanish.
 
@@ -19,10 +19,9 @@ So: available == the coordinator's last update succeeded AND we hold a state,
 independent of what that state says. The mower being offline never makes an
 entity disappear.
 
-Note this is NOT the household_state contract of overriding `available` to
-True unconditionally. LAW.md §15 says to apply a rule where it GOVERNS: that
-contract exists because household_state reads other entities and has no
-service to lose. This integration has a cloud to lose, so losing it is
+Note this is NOT the stricter contract of overriding `available` to True
+unconditionally. A rule is applied where it GOVERNS: that contract exists for a
+coordinator reading other entities, which has no service to lose. This integration has a cloud to lose, so losing it is
 reportable as unavailability -- and only that.
 """
 

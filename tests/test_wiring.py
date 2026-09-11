@@ -16,9 +16,9 @@ import os
 import re
 import sys
 
-# tests/ sits directly under the component root in BOTH layouts: this repo
-# standing alone, and this repo checked out as jrackerby/HA's
-# custom_components/navimow submodule. One expression covers both.
+# tests/ sits directly under the component root in both layouts: this repo
+# standing alone, and this repo installed as custom_components/navimow.
+# One expression covers both.
 COMPONENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # filename stem -> the strings.json entity section it must resolve against
@@ -95,13 +95,13 @@ def test_the_event_channel_is_actually_subscribed():
 def test_every_coordinator_accessor_has_a_consumer():
     """A reading cached and read by NOTHING is the defect this catches.
 
-    GH-548: the coordinator subscribed the MQTT `attributes` channel, cached
-    every payload, and exposed get_device_attributes() -- and no entity and no
+    The worked example: the coordinator subscribed the MQTT `attributes`
+    channel, cached every payload, and exposed get_device_attributes() -- and no entity and no
     diagnostic ever called it. The data arrived, was stored, and was invisible,
     which is worse than not collecting it: the integration looked like it
     covered the channel. It is also the ONE channel that could still be
     carrying a mowing schedule or a blade/service figure, so the blind spot
-    correlated exactly with the open question (LAW.md 10).
+    correlated exactly with the open question.
 
     Nothing errors in that state and no test of behaviour would have caught
     it, because the behaviour was correct -- so the gate is structural: every
@@ -130,7 +130,7 @@ def test_every_coordinator_accessor_has_a_consumer():
 
 
 def test_every_translation_key_resolves():
-    """An audit is a join (LAW.md 5). A translation_key with no strings.json
+    """An audit is a join. A translation_key with no strings.json
     entry renders as a raw slug on the wall and nothing errors."""
     strings = json.loads(source("strings.json"))
     entity_sections = strings.get("entity", {})
@@ -157,8 +157,8 @@ def test_every_translation_key_resolves():
 
 
 def test_no_credential_reaches_a_log_line():
-    """NavimowHA logged the MQTT password at INFO as `first2***last2`. GH-531
-    is this estate rotating a pair of tokens for exactly that class of leak.
+    """NavimowHA logged the MQTT password at INFO as `first2***last2` --
+    four real characters of a live secret, on every setup.
     Partial masking is not redaction, so the gate is on the NAME appearing
     anywhere in a logging call, not on whether it looked masked."""
     secrets = ("pwdInfo", "userName", "password", "client_secret",
@@ -241,7 +241,7 @@ def test_strings_and_english_translation_agree():
 
 
 def test_the_assertions_can_fail():
-    """LAW.md 4: every assertion set needs a self-test proving it CAN fail.
+    """Every assertion set needs a self-test proving it CAN fail.
 
     Each gate below is fed a string it MUST trip. Without this, a regex that
     stopped matching -- the credential one is a multiline pattern over a call
@@ -270,8 +270,8 @@ def main():
     tests = [v for k, v in sorted(globals().items()) if k.startswith("test_")]
     for test in tests:
         test()
-    # LAW.md 5: a sweep that does not assert its own completeness is not
-    # evidence. Count successful reads, never attempts.
+    # A sweep that does not assert its own completeness is not evidence.
+    # Count successful reads, never attempts.
     if not READ:
         print("CANNOT RUN: no component file was read; the paths are wrong")
         return 2

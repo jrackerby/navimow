@@ -62,15 +62,15 @@ class NavimowOAuth2FlowHandler(
     async def async_oauth_create_entry(self, data: dict[str, Any]) -> ConfigFlowResult:
         """Prove the token works on the channel the integration will use.
 
-        LAW.md §9, and the rule the quality scale calls `test-before-configure`:
-        a setup check that exercises a different channel than the one that will
-        be used certifies nothing, and it certifies nothing GREEN, which is
+        The rule the quality scale calls `test-before-configure`: a setup
+        check that exercises a different channel than the one that will be
+        used certifies nothing, and it certifies nothing GREEN, which is
         worse than no check. A completed OAuth redirect only proves the login
         page worked. The integration then talks to /openapi/smarthome/authList
         with a bearer token, so that is what gets called here, with the token
         that was just issued, before an entry exists to be broken.
 
-        The worked example in §9 is this exact shape: a config flow probed a
+        The worked example is this exact shape: a config flow probed a
         host's telemetry daemon while the integration polled over ssh, an entry
         was created against an account that did not exist, and it read healthy
         for weeks on the other channel.

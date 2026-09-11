@@ -10,31 +10,28 @@ take the old id, because it is still occupied, so it lands on the next free
 suffix (a platform assigning entity_id takes `_2` when the id is taken and
 never reclaims it).
 
-WHAT LEFT THIS FILE, AND WHERE IT WENT (GH-664). Until this component owned
-its own repo, this suite also held a CONSUMERS map asserting that
-`jrackerby/HA`'s `custom_templates/net_tiers.jinja` still names
-`lawn_mower.navimow_x430_2`. That half stayed behind as
-`tools/test_navimow_consumers.py` in THAT repo, deliberately and not as a
-convenience: its subject is an estate file this repository does not contain
-and must never assume is present. A check that silently skips when its subject
-is missing is the vacuous-green shape both halves were written to refuse, and
-this repo's CI would skip it on every run.
+WHAT IS DELIBERATELY NOT HERE. A matching check that each CONSUMER of these
+ids -- a template, a dashboard, an automation -- still names them belongs
+wherever those consumers live, not here. Their subject is a file this
+repository does not contain and must never assume is present, and a check that
+silently skips when its subject is missing is the vacuous-green shape both
+halves were written to refuse.
 
 WHAT THIS DOES NOT PROVE. It compares against NavimowHA's unique_id
 EXPRESSIONS as read from its source at 1.1.0, not against the live registry.
 If the installed version is not the one these shapes were read from, or if the
 rows were created by some third integration, the ids will still move and this
-suite will still be green. Confirming that needs one registry read on the
-host; jrackerby/HA#541 carries it.
+suite will still be green. Confirming that needs one read of the live entity
+registry, which this suite deliberately cannot do.
 """
 import importlib.util
 import os
 import re
 import sys
 
-# tests/ sits directly under the component root in BOTH layouts: this repo
-# standing alone, and this repo checked out as jrackerby/HA's
-# custom_components/navimow submodule. One expression covers both.
+# tests/ sits directly under the component root in both layouts: this repo
+# standing alone, and this repo installed as custom_components/navimow.
+# One expression covers both.
 COMPONENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODEL = os.path.join(COMPONENT, "model.py")
 

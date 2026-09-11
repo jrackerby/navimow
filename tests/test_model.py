@@ -19,9 +19,9 @@ import importlib.util
 import os
 import sys
 
-# tests/ sits directly under the component root in BOTH layouts: this repo
-# standing alone, and this repo checked out as jrackerby/HA's
-# custom_components/navimow submodule. One expression covers both.
+# tests/ sits directly under the component root in both layouts: this repo
+# standing alone, and this repo installed as custom_components/navimow.
+# One expression covers both.
 COMPONENT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 MODULE = os.path.join(COMPONENT, "model.py")
 
@@ -68,7 +68,7 @@ def test_offline_is_not_error():
     check(
         m.resolve_activity("unknown") != "error",
         "resolve_activity('unknown') must never be 'error' -- this is the "
-        "NavimowHA defect GH-541 exists to fix",
+        "defect this component exists to fix",
     )
 
 
@@ -93,11 +93,9 @@ def test_every_sdk_state_maps_into_core_or_none():
 
 
 def test_real_states_still_map_as_the_boards_expect():
-    """custom_templates/net_tiers.jinja:52 gates on exactly these four words.
-    dashboards/sunroom-panel.yaml rendered off the same entity until GH-575
-    deleted dashboards/, so the jinja gate is now the only consumer in this
-    repo -- which makes these words matter more, not less. Changing any of
-    them silently changes what the network tier reports."""
+    """Downstream templates and dashboards gate on exactly these four words.
+    Changing any of them silently changes what every consumer reports, with
+    no error anywhere to point at."""
     for state, expected in (
         ("mowing", "mowing"),
         ("returning", "returning"),
@@ -164,7 +162,7 @@ def test_problem_and_offline_do_not_collapse():
     check(m.is_problem(None, "error") is True,
           "an error activity is a problem even with no code")
     check(m.is_problem(None, None) is None,
-          "no reading at all is None, not False (LAW.md 11)")
+          "no reading at all is None, not False")
 
 
 # -- events -----------------------------------------------------------------
@@ -189,7 +187,7 @@ def test_event_bucket_is_total_and_declared():
           "an unrecognised name must land in `other`, not be guessed at")
 
 
-# -- the suite's own falsifiability (LAW.md 4) -------------------------------
+# -- the suite's own falsifiability -------------------------------
 
 def test_the_assertions_can_fail():
     """Every assertion set needs a self-test proving it CAN fail.
