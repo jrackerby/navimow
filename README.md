@@ -77,6 +77,16 @@ instrument for the first:
   whole and unfiltered for that reason — selecting keys would need us to
   already know which ones matter. Download diagnostics after a real mowing
   session to see what is actually on it.
+
+  Read the dump's `mqtt.connected` and `seconds_since_mqtt_push` before
+  concluding anything from an empty `attributes`. A docked mower sleeps and
+  publishes nothing, which produces a dump identical to a dead broker session;
+  those two have opposite fixes. Note also that `entry` still stores
+  NavimowHA's `mqtt_username` / `mqtt_password` / `mqtt_broker` keys on an
+  upgraded installation — this integration reads none of them and re-resolves
+  the broker and its credentials from `mqtt/userInfo/get/v2` on every setup,
+  so a `null` there is not an authentication finding. `entry_keys_unused`
+  lists them for exactly that reason.
 - Segway's published Open API is documented for the **X3 series Expansion
   Bay**; this was developed against an X430 (X4 series). Whether it reaches X4
   is unverified.
