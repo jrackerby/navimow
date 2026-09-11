@@ -9,15 +9,14 @@ no vendor SDK. That is the same split household_state draws at resolver.py.
 THE UNIQUE_ID FUNCTIONS ARE LOAD-BEARING AND MUST NOT BE "TIDIED".
 This component replaces segwaynavimow/NavimowHA in place, on the same domain.
 The entity registry keys rows on (platform, domain, unique_id), so the ids
-`lawn_mower.navimow_x430_2` and `sensor.navimow_x430_battery_2` -- referenced
-from custom_templates/net_tiers.jinja:52, dashboards/sunroom-panel.yaml:50,
-dashboards/control-card-test.yaml:54 and www/robot-fleet-card.js:225 -- survive
-the swap if and only if we re-emit NavimowHA's exact strings. Its shapes were
+`lawn_mower.navimow_x430_2` and `sensor.navimow_x430_battery_2` -- and every
+dashboard, template and automation already referencing them -- survive the swap
+if and only if we re-emit NavimowHA's exact strings. Its shapes were
 `f"{DOMAIN}_{device_id}"` for the mower and `f"{DOMAIN}_{device_id}_{key}"` for
 the battery sensor (key="battery"). Change either and HA mints a fresh row, the
-old one is orphaned, and the new one takes `_3` because the id is occupied
-(TOOLS.md: a platform assigning entity_id takes _2 when the id is taken and
-never reclaims it). test_navimow_migration.py pins both strings.
+old one is orphaned, and the new one takes `_3` because the id is occupied: a
+platform assigning entity_id takes the next free suffix and never reclaims the
+one it lost. test_navimow_migration.py pins both strings.
 """
 
 from __future__ import annotations
@@ -74,7 +73,7 @@ CANONICAL_TO_ACTIVITY: dict[str, str | None] = {
     # NavimowHA's const.py had `"unknown": "error"`, while mower_sdk's
     # _RAW_STATE_TO_CANONICAL maps BOTH "Offline" and "offline" to "unknown".
     # Composed, a mower that had merely lost its uplink reported a fault
-    # needing assistance. LAW.md §11: absent and unreachable do not collapse.
+    # needing assistance. Absent and unreachable do not collapse.
     # Reachability is binary_sensor.<name>_connectivity's job and is answered
     # there, correctly, in both directions.
     "unknown": None,
@@ -102,8 +101,8 @@ def is_reachable(canonical_state: str | None, device_online: bool | None) -> boo
     the question the cloud is answering for us.
 
     Returns None when neither signal is present, so 'we were not told' does
-    not silently render as 'offline' (LAW.md §11: `ok at zero` and `could not
-    read` are different values at the source).
+    not silently render as 'offline' -- `ok at zero` and `could not read` are
+    different values at the source.
     """
     if canonical_state == "unknown":
         return False
@@ -153,12 +152,11 @@ def normalise_error(error: dict | None) -> tuple[str | None, str | None]:
 def is_problem(error: dict | None, canonical_state: str | None) -> bool | None:
     """BinarySensorDeviceClass.PROBLEM -- true when the mower needs a human.
 
-    THE SECOND SOURCE www/robot-fleet-card.js SAYS IT DOES NOT HAVE. That
-    card's own header records the gap: "the mower reports through one entity,
-    so a Mowing reading drops to neutral and says single source (LAW 7: an
-    unpaired state can never read good) -- verified live, this device has no
-    second source to check against." An error channel that is independent of
-    the activity string is exactly that source.
+    THE SECOND SOURCE A DASHBOARD NEEDS AND DID NOT HAVE. With the mower
+    reporting through one entity, a "Mowing" reading has nothing to be checked
+    against, so a careful surface drops it to neutral and says single source --
+    an unpaired state can never read good. An error channel that is independent
+    of the activity string is exactly that missing second source.
 
     Being OFFLINE is not a problem in this sense -- nobody has to walk to the
     garden about it -- so it returns False here and is reported by the
@@ -170,7 +168,7 @@ def is_problem(error: dict | None, canonical_state: str | None) -> bool | None:
     if canonical_state == "error":
         return True
     if canonical_state is None or canonical_state == "unknown":
-        # We have no fault reading at all. Not False -- see LAW.md §11.
+        # We have no fault reading at all. Not False: absent is not ok.
         return None
     return False
 
@@ -194,7 +192,7 @@ def event_bucket(level: str | None, event: str | None) -> str:
     Buckets on LEVEL first because that is the field the cloud sets
     deliberately; the event NAME is a free string and is carried through as an
     attribute rather than being pattern-matched into meaning here. A scan
-    keyed on one pattern is not an audit (LAW.md §5) -- so this does not
+    keyed on one pattern is not an audit -- so this does not
     pretend to classify names it has never seen.
     """
     if level:

@@ -53,7 +53,7 @@ async def async_get_config_entry_diagnostics(
                 "state": async_redact_data(state.to_dict(), TO_REDACT)
                 if state is not None
                 else None,
-                # THE ONLY WINDOW ONTO AN UNDOCUMENTED CHANNEL (GH-548).
+                # THE ONLY WINDOW ONTO AN UNDOCUMENTED CHANNEL.
                 # /downlink/vehicle/<id>/realtimeDate/attributes carries a
                 # free-form dict that no published source characterises, and
                 # it is the one place a mowing schedule or a blade/service

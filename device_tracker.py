@@ -1,16 +1,14 @@
 """GPS tracker for the mower.
 
-WHY THIS IS WORTH A PLATFORM. custom_templates/net_tiers.jinja:52 carries the
-estate's one hardcoded pin table, mapping device_tracker.navimow_x430 to
-lawn_mower.navimow_x430_2, and its own comment says why it had to be hardcoded:
-"There is no structural signal to discover it from -- the UniFi tracker and the
-Navimow integration entity are different devices with no shared device_id."
+WHY THIS IS WORTH A PLATFORM. Pairing a network tracker for the mower with the
+mower's own integration entity normally has to be hardcoded, because there is
+no structural signal to discover it from: a Wi-Fi tracker and the Navimow
+integration entity are different devices with no shared device_id.
 
-The cloud has been sending position on every state message and NavimowHA put
-it in an attribute. A tracker on the Navimow DEVICE gives that map the shared
-device_id it says does not exist, so the pin can eventually be derived instead
-of pinned. That is a follow-up in jrackerby/HA#541 and not done here: this
-only supplies the signal.
+The cloud has been sending position on every state message and NavimowHA put it
+in an attribute. A tracker on the Navimow DEVICE supplies the shared device_id
+that pairing lacks, so it can eventually be derived rather than pinned. This
+only supplies the signal; deriving the pin is a separate change.
 
 It does NOT replace the UniFi tracker. That one answers "is the mower on the
 house Wi-Fi", this one answers "where in the garden is it", and the jinja

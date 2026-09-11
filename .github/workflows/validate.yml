@@ -37,7 +37,7 @@ jobs:
       # home-assistant/actions/hassfest takes no path input: it scans
       # custom_components/* under the workspace. This repo keeps the
       # integration at its ROOT (hacs.json content_in_root) because
-      # jrackerby/HA submodules it AS custom_components/navimow.
+      # that is the layout HACS installs from, as custom_components/navimow.
       - name: stage the custom_components layout hassfest scans
         run: |
           set -euo pipefail
@@ -55,7 +55,7 @@ jobs:
       # there: hassfest's validate_iqs_file opens with `if not integration.core:
       # return`, so quality_scale.yaml goes unread for a custom component while
       # the manifest schema still ACCEPTS a quality_scale key. A tier declared
-      # there is a self-claim with no gate behind it (jrackerby/HA LAW 15).
+      # there is a self-claim with no gate behind it.
       - uses: home-assistant/actions/hassfest@master
 
   tests:
@@ -166,12 +166,12 @@ jobs:
       # hacs.json and manifest.json from raw.githubusercontent.com with NO
       # Authorization header, in CI and in a live install alike, so a private
       # repository 404s. Reporting it VOID keeps the distinction that matters:
-      # the check did not run, so nothing was proven either way. jrackerby/HA#483.
+      # the check did not run, so nothing was proven either way.
       - name: VOID -- HACS validation cannot run against a private repository
         if: ${{ github.event.repository.private }}
         run: |
           echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
-          echo "See jrackerby/HA#483. This is a VOID, not a pass."
+          echo "This is a VOID, not a pass."
 
       # Runs for real the moment this repository is public. `brands` stays
       # ignored: it needs either brand/icon.png committed here or an accepted

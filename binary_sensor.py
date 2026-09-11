@@ -1,11 +1,10 @@
 """Binary sensors: the fault axis, the reachability axis, and charging.
 
-THE PROBLEM SENSOR IS THE POINT OF THIS FILE. www/robot-fleet-card.js records
-in its own header that the mower "reports through one entity, so a Mowing
-reading drops to neutral and says single source (LAW 7: an unpaired state can
-never read good) -- verified live, this device has no second source to check
-against." The vendor SDK has been parsing an independent error channel the
-whole time; NavimowHA put it in an attribute. Here it is an entity, which is
+THE PROBLEM SENSOR IS THE POINT OF THIS FILE. With the mower reporting through
+one entity, a "Mowing" reading has nothing to be checked against, so a careful
+surface drops it to neutral and says single source -- an unpaired state can
+never read good. The vendor SDK has been parsing an independent error channel
+the whole time; NavimowHA put it in an attribute. Here it is an entity, which is
 what a card can actually pair against.
 
 CONNECTIVITY AND PROBLEM ARE DELIBERATELY SEPARATE AXES. NavimowHA had one

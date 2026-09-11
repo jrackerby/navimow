@@ -1,6 +1,6 @@
-# Integration Quality Scale self-assessment. LAW.md §15 makes this the build
-# standard; Bronze is the floor and Silver the target for anything reading a
-# device. The rule names below were read from ALL_RULES in home-assistant/core
+# Integration Quality Scale self-assessment. The scale is this component's
+# build standard; Bronze is the floor and Silver the target for anything
+# reading a device. The rule names below were read from ALL_RULES in home-assistant/core
 # script/hassfest/quality_scale.py, not from a remembered summary.
 #
 # THIS FILE IS NOT A GATE, AND SAYING SO IS THE POINT. hassfest's
@@ -9,7 +9,6 @@
 # manifest.json carries NO `quality_scale` key: the schema would accept
 # "silver" and no validator would ever test the claim, which is a confident
 # assertion with no gate behind it. Four rules below are honestly `todo`.
-# jrackerby/HA#541 carries them.
 
 rules:
   # ---- BRONZE ----
@@ -42,7 +41,7 @@ rules:
   dependency-transparency:
     status: todo
     comment: >-
-      CORRECTED (GH-548). This previously said navimow-sdk's source "is not
+      CORRECTED. This previously said navimow-sdk's source "is not
       published anywhere we can read", which was simply wrong -- it is at
       github.com/segwaynavimow/navimow-sdk under GPL-3.0, and HEAD is
       byte-identical to the shipped 0.1.2 wheel. Open source: yes. On PyPI,
@@ -76,7 +75,7 @@ rules:
     comment: >-
       config_flow.async_oauth_create_entry calls authList with the freshly
       issued token before an entry exists -- the channel the integration
-      actually uses, not just the login redirect. LAW.md §9.
+      actually uses, not just the login redirect.
   test-before-setup:
     status: done
     comment: >-
@@ -111,7 +110,7 @@ rules:
     comment: >-
       Once at the crossing and once on recovery, INFO, deduped on a stable
       condition token rather than the rendered message, and armed only once HA
-      reaches RUNNING. LAW.md §15 carries all three halves of that.
+      reaches RUNNING -- all three halves of the rule.
   parallel-updates:
     status: done
     comment: 1 on the command platforms, 0 on the read-only ones.

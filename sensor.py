@@ -111,9 +111,8 @@ SENSORS: tuple[NavimowSensorDescription, ...] = (
         device_class=SensorDeviceClass.DURATION,
         native_unit_of_measurement=UnitOfTime.SECONDS,
         # TOTAL_INCREASING, so the lifetime counter becomes a long-term
-        # statistic and survives purge_keep_days -- LAW.md §3 pins that window
-        # untouched, which makes statistics the only place a multi-season
-        # runtime figure can live.
+        # statistic and survives the recorder's purge window, which makes
+        # statistics the only place a multi-season runtime figure can live.
         state_class=SensorStateClass.TOTAL_INCREASING,
         entity_registry_enabled_default=False,
         value_fn=lambda state: _metric(state, "total_mowing_time"),

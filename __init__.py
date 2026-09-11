@@ -6,9 +6,9 @@ reuses those rows and lawn_mower.navimow_x430_2 / sensor.navimow_x430_battery_2
 keep their ids and their history. model.py carries the full reasoning and
 tools/test_navimow_migration.py pins the strings. Everything else here is new.
 
-SETUP CANNOT VALIDATE ITSELF ANY FURTHER THAN IT DOES. LAW.md §9: a setup
-check that exercises a different channel than the one that will be used
-certifies nothing. So setup proves the two channels it will actually use, in
+SETUP CANNOT VALIDATE ITSELF ANY FURTHER THAN IT DOES. A setup check that
+exercises a different channel than the one that will be used certifies
+nothing. So setup proves the two channels it will actually use, in
 the order it will use them -- an authenticated REST call (authList) and then
 an authenticated MQTT connection -- and does not report ready on the strength
 of the OAuth token alone.
@@ -133,8 +133,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
     # NOTHING DERIVED FROM A CREDENTIAL IS LOGGED, at any level. NavimowHA
     # logged the broker password at INFO masked as `first2***last2`, which is
     # four real characters of a live secret written to the journal on every
-    # setup. GH-531 is this estate already rotating a pair of tokens for
-    # exactly that reason.
+    # setup.
     _LOGGER.debug("Navimow MQTT endpoint resolved: broker=%s port=%s", broker, port)
 
     runtime = NavimowRuntimeData(sdk=None, api=api, devices=devices)

@@ -16,8 +16,7 @@ THREE THINGS THIS DOES THAT NavimowHA DID NOT.
 
 3. It logs nothing derived from a credential. NavimowHA logged the MQTT
    password at INFO as `first2***last2` on every setup -- four real characters
-   of a live secret, per restart, forever. GH-531 is the estate already paying
-   for that class of leak once.
+   of a live secret, per restart, forever.
 """
 
 from __future__ import annotations
@@ -74,9 +73,9 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_data_source: str | None = None
 
         # log-when-unavailable (Silver). Deduped on a STABLE CONDITION TOKEN,
-        # never on the rendered message: LAW.md §15 records that a once-only
-        # log keyed on its own text turns one condition into a new line every
-        # time a count inside the string moves.
+        # never on the rendered message: a once-only log keyed on its own
+        # text turns one condition into a new line every time a count inside
+        # the string moves.
         self._logged_condition: str | None = None
         self._logging_armed = False
 
@@ -93,7 +92,7 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
     def async_arm_logging(self, *_: Any) -> None:
         """Start logging source conditions once HA has reached RUNNING.
 
-        LAW.md §15: gate on HA reaching RUNNING, never on the readings, and a
+        Gate on HA reaching RUNNING, never on the readings, and note that a
         gate that RECORDS while silent is worse than none -- the condition
         would then read as already-reported the moment logging arrives and a
         real fault present through startup would never log at all. So
@@ -265,8 +264,8 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """Log once at the crossing into a condition, not on every poll.
 
         Level is INFO because this is the integration reporting on its own
-        subject and nobody can act on it -- LAW.md §15 splits the level on who
-        acts, and a cloud that is briefly unreachable needs no edit.
+        subject and nobody can act on it -- the level splits on who acts, and
+        a cloud that is briefly unreachable needs no edit.
         """
         if not self._logging_armed or self._logged_condition == token:
             return
