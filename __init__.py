@@ -56,6 +56,14 @@ class NavimowRuntimeData:
     devices: list[Any]
     coordinators: dict[str, Any] = field(default_factory=dict)
     unloading: bool = False
+    # THE ENDPOINT ACTUALLY CONNECTED TO, kept because nothing else retains it.
+    # `entry.data` carries NavimowHA-era `mqtt_broker`/`mqtt_port` keys that
+    # this component never reads, so a diagnostics dump that reported only the
+    # entry was reporting an inherited value for a session established from a
+    # live `mqtt/userInfo/get/v2` response. Resolved here, reported from here.
+    mqtt_broker: str | None = None
+    mqtt_port: int | None = None
+    mqtt_transport: str | None = None
 
 
 NavimowConfigEntry = ConfigEntry[NavimowRuntimeData]
@@ -136,7 +144,14 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
     # setup.
     _LOGGER.debug("Navimow MQTT endpoint resolved: broker=%s port=%s", broker, port)
 
-    runtime = NavimowRuntimeData(sdk=None, api=api, devices=devices)
+    runtime = NavimowRuntimeData(
+        sdk=None,
+        api=api,
+        devices=devices,
+        mqtt_broker=broker,
+        mqtt_port=port,
+        mqtt_transport="websocket" if ws_path else "tcp",
+    )
 
     def _build_sdk() -> Any:
         # paho's connect path does blocking TLS work (tls_set,

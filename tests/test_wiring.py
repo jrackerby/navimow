@@ -11,10 +11,12 @@ NavimowHA worth replacing: a channel subscribed but never listened to, a
 translation key with nothing behind it, a credential reaching a log line.
 """
 import ast
+import io
 import json
 import os
 import re
 import sys
+import tokenize
 
 # tests/ sits directly under the component root in both layouts: this repo
 # standing alone, and this repo installed as custom_components/navimow.
@@ -46,6 +48,31 @@ def source(name):
         body = handle.read()
     READ.append(name)
     return body
+
+
+def code_only(body):
+    """Strip comments and string literals, leaving executable text.
+
+    ASSERT ON CODE FORMS, NOT ON IDENTIFIERS, AND STRIP COMMENTS FIRST. A file
+    that documents its own history matches every check that says the history
+    is gone: this component's diagnostics.py explains in a comment why it does
+    NOT reach into the SDK internal, and a plain substring gate read that
+    explanation as the reach itself and failed a correct file. A negative gate
+    over raw text can only ever be right about a file that never discusses
+    what it refuses to do.
+    """
+    out = []
+    previous_end = (1, 0)
+    for token in tokenize.generate_tokens(io.StringIO(body).readline):
+        if token.type in (tokenize.COMMENT, tokenize.STRING):
+            continue
+        if token.start[0] != previous_end[0]:
+            out.append("\n")
+        elif token.start[1] > previous_end[1]:
+            out.append(" ")
+        out.append(token.string)
+        previous_end = token.end
+    return "".join(out)
 
 
 def test_every_declared_platform_has_a_module_that_sets_up():
@@ -127,6 +154,52 @@ def test_every_coordinator_accessor_has_a_consumer():
               f"coordinator.{accessor}() is defined and cached but nothing "
               "outside coordinator.py reads it -- either surface it or stop "
               "collecting it; a channel stored and never read reads as covered")
+
+
+def test_the_mqtt_session_is_reported_by_diagnostics():
+    """A CHANNEL WHOSE OWN STATE IS UNOBSERVABLE CANNOT BE DIAGNOSED.
+
+    The failure this gate exists to keep fixed: a dump showing no attributes
+    and no events is produced BOTH by a dead broker session and by a mower
+    docked and asleep with nothing to publish. The symptoms are identical and
+    the fixes are opposite, so without the session's own state the dump sends
+    the reader to guess -- and the guess that was actually made, off this very
+    file's output, was that `mqtt_username: null` in the entry meant MQTT had
+    no credentials. It does not: those keys are NavimowHA's, this component
+    reads neither, and it re-resolves both from mqtt/userInfo/get/v2 on every
+    setup.
+
+    It must come off the PUBLIC property. NavimowSDK.is_connected forwards to
+    paho's own is_connected(); reaching `sdk._mqtt` here would tie the dump to
+    an SDK internal for a reading the facade already answers.
+    """
+    diagnostics = source("diagnostics.py")
+    check('"mqtt"' in diagnostics,
+          "diagnostics.py publishes no mqtt block, so a dump cannot tell a "
+          "dead broker session from a mower with nothing to say")
+    check("is_connected" in diagnostics,
+          "the mqtt block does not report sdk.is_connected -- broker/port "
+          "alone say where we would have connected, never whether we did")
+    # Comments stripped first: this file explains in prose why it does not do
+    # the thing, and a raw-text gate read the explanation as the thing.
+    check("sdk._mqtt" not in code_only(diagnostics),
+          "diagnostics.py reaches into sdk._mqtt; NavimowSDK.is_connected is "
+          "public and answers this without pinning an SDK internal")
+    check("seconds_since_mqtt_push" in diagnostics,
+          "no per-device time-since-push, so a connected session that has "
+          "gone quiet reads exactly like one that never received anything")
+    check("entry_keys_unused" in diagnostics,
+          "the inherited NavimowHA entry keys are dumped with nothing saying "
+          "they are dead; mqtt_username: null has already been read as proof "
+          "that MQTT was unauthenticated")
+
+    # The reported endpoint must be the one setup RESOLVED, not the entry's
+    # inherited copy -- that is the whole point of carrying it on runtime data.
+    init = source("__init__.py")
+    for field_name in ("mqtt_broker", "mqtt_port", "mqtt_transport"):
+        check(f"{field_name}:" in init or f"{field_name}=" in init,
+              f"NavimowRuntimeData does not carry {field_name}, so diagnostics "
+              "can only report the entry's inherited value")
 
 
 def test_every_translation_key_resolves():
@@ -264,6 +337,34 @@ def test_the_assertions_can_fail():
         FAILURES.append("SELF-TEST FAILED: the CJK pattern does not match Chinese")
     if "self.sdk.on_event(" in "self.sdk.on_state(self._handle_state)":
         FAILURES.append("SELF-TEST FAILED: the on_event check also matches on_state")
+    # The private-reach gate is a NEGATIVE check, which is the kind that goes
+    # vacuous without ever saying so: if `sdk._mqtt` stopped being the spelling
+    # of the thing being refused, the check would pass over a file that reached
+    # straight into the SDK. Prove it still trips on the string it forbids.
+    if "sdk._mqtt" not in code_only("runtime.sdk._mqtt.is_connected\n"):
+        FAILURES.append(
+            "SELF-TEST FAILED: the private-reach gate does not match a line "
+            "that reaches into sdk._mqtt, so it cannot refuse what it exists "
+            "to refuse"
+        )
+    # And the stripper must actually strip, or the gate above passes for the
+    # wrong reason -- a code_only() that returned "" would satisfy every
+    # negative check in this suite forever.
+    if "sdk._mqtt" in code_only('# a comment naming sdk._mqtt\nx = 1\n'):
+        FAILURES.append(
+            "SELF-TEST FAILED: code_only() leaves comment text in place, so "
+            "the private-reach gate still fails a file that merely documents "
+            "the reach it refuses"
+        )
+    if "x = 1" not in code_only("# comment\nx = 1\n"):
+        FAILURES.append(
+            "SELF-TEST FAILED: code_only() dropped executable code; a gate "
+            "over its output would pass over a file it can no longer see"
+        )
+    if "is_connected" not in "runtime.sdk.is_connected":
+        FAILURES.append(
+            "SELF-TEST FAILED: the mqtt-session gate cannot see is_connected"
+        )
 
 
 def main():
