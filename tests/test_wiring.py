@@ -75,6 +75,54 @@ def code_only(body):
     return "".join(out)
 
 
+def _png_size(path):
+    """Width/height straight out of the IHDR chunk. No Pillow: CI installs only
+    what the manifest declares, and a suite that needs an imaging library to
+    check an image is a suite that stops running."""
+    with open(path, "rb") as fh:
+        head = fh.read(24)
+    if len(head) < 24 or head[:8] != b"\x89PNG\r\n\x1a\n" or head[12:16] != b"IHDR":
+        return None, None
+    return (int.from_bytes(head[16:20], "big"), int.from_bytes(head[20:24], "big"))
+
+
+def _png_is_transparent(path):
+    """Does this PNG actually render with transparency?
+
+    THREE COLOUR TYPES ANSWER YES, AND CHECKING ONLY ONE FAILS CORRECT FILES.
+    Types 6 (RGBA) and 4 (grey+alpha) carry a per-pixel alpha channel. Type 3
+    (palette) carries none, and is still transparent when a tRNS chunk marks
+    palette entries see-through -- which is what every palette-quantised PNG
+    does, and quantising is how these assets got from 850KB to 158KB. An
+    earlier cut of this gate tested the colour type alone and failed seven
+    correct images.
+
+    A palette PNG with NO tRNS is genuinely opaque and renders as the solid
+    slab this is here to refuse, so the chunk is walked rather than assumed.
+    """
+    with open(path, "rb") as fh:
+        data = fh.read()
+    if data[:8] != b"\x89PNG\r\n\x1a\n":
+        return False
+    colour_type = data[25]
+    if colour_type in (4, 6):
+        return True
+    if colour_type != 3:
+        return False
+    # Walk the chunk list properly: a bare `b"tRNS" in data` would also match
+    # the bytes falling inside compressed image data by coincidence.
+    offset = 8
+    while offset + 8 <= len(data):
+        length = int.from_bytes(data[offset:offset + 4], "big")
+        kind = data[offset + 4:offset + 8]
+        if kind == b"tRNS":
+            return True
+        if kind == b"IDAT":
+            break  # tRNS is required to precede IDAT
+        offset += 12 + length
+    return False
+
+
 def test_every_declared_platform_has_a_module_that_sets_up():
     """const.PLATFORMS is parsed, not imported -- it pulls in homeassistant."""
     const_src = source("const.py")
@@ -200,6 +248,71 @@ def test_the_mqtt_session_is_reported_by_diagnostics():
         check(f"{field_name}:" in init or f"{field_name}=" in init,
               f"NavimowRuntimeData does not carry {field_name}, so diagnostics "
               "can only report the entry's inherited value")
+
+
+def test_the_brand_assets_exist_and_meet_core_s_sizes():
+    """Core 2026.3+ serves a custom integration's OWN brand/ directory.
+
+    The sizes are core's, not ours, and a file outside them is not rejected
+    loudly -- it is served and renders wrong, which is the kind of defect that
+    ships because nothing errors. icon must be square 256/512; a logo's SHORT
+    side must be 128-256 normal and 256-512 hDPI.
+
+    Dark variants are not optional here on judgement rather than on rule: the
+    wordmark is black, so without them the logo is invisible against every dark
+    theme, which is most of them.
+    """
+    brand = os.path.join(COMPONENT, "brand")
+    check(os.path.isdir(brand), "no brand/ directory -- core has nothing to serve "
+                                "and the UI falls back to a generic icon")
+    if not os.path.isdir(brand):
+        return
+
+    # (filename, is_square, short-side low, short-side high)
+    EXPECTED = [
+        ("icon.png", True, 256, 256), ("icon@2x.png", True, 512, 512),
+        ("dark_icon.png", True, 256, 256), ("dark_icon@2x.png", True, 512, 512),
+        ("logo.png", False, 128, 256), ("logo@2x.png", False, 256, 512),
+        ("dark_logo.png", False, 128, 256), ("dark_logo@2x.png", False, 256, 512),
+    ]
+    for name, square, low, high in EXPECTED:
+        path = os.path.join(brand, name)
+        if not os.path.exists(path):
+            FAILURES.append(f"brand/{name} is missing")
+            continue
+        w, h = _png_size(path)
+        READ.append(f"brand/{name}")
+        if w is None:
+            FAILURES.append(f"brand/{name} is not a readable PNG")
+            continue
+        if square:
+            check(w == h == low,
+                  f"brand/{name} is {w}x{h}; core wants a square {low}x{low}")
+        else:
+            check(low <= min(w, h) <= high,
+                  f"brand/{name} short side is {min(w, h)}; core wants "
+                  f"{low}-{high}")
+        # A brand image with no transparency renders as a white slab on a dark
+        # theme even when the artwork itself is correct.
+        check(_png_is_transparent(path),
+              f"brand/{name} renders opaque -- no alpha channel and no tRNS -- "
+              "so it will show as a solid block against a dark theme")
+
+    # The tile picture must point at what core actually serves, or it 404s and
+    # the tile renders an empty frame rather than falling back to an icon.
+    const_src = source("const.py")
+    check('"/api/brands/integration/' in const_src
+          or "'/api/brands/integration/" in const_src,
+          "const.py does not build the core-served brand url; a tile picture "
+          "pointing anywhere else needs a static path this component does not "
+          "register")
+    check("BRAND_ICON_URL" in source("lawn_mower.py"),
+          "the mower entity does not carry the brand picture")
+    for stem in ("sensor", "binary_sensor", "button", "device_tracker", "event"):
+        check("entity_picture" not in source(f"{stem}.py"),
+              f"{stem}.py sets an entity_picture -- a picture outranks the "
+              "icon, so this costs every one of those entities the meaning "
+              "its icon carries. The brand mark belongs on the mower alone.")
 
 
 def test_every_translation_key_resolves():

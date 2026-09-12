@@ -16,6 +16,7 @@ from homeassistant.exceptions import HomeAssistantError
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 
 from . import NavimowConfigEntry
+from .const import BRAND_ICON_URL
 from .entity import NavimowEntity
 from .model import mower_unique_id, resolve_activity
 
@@ -42,6 +43,21 @@ class NavimowLawnMower(NavimowEntity, LawnMowerEntity):
     """Start / pause / dock. Core's LawnMowerEntityFeature has no other members."""
 
     _attr_name = None  # the device's own name, via _attr_has_entity_name
+    # THE BRAND MARK ON THE TILE, AND IT IS ONLY ON THIS ONE ENTITY.
+    # `entity_picture` outranks the icon wherever a surface renders one, so
+    # putting it on the whole set would replace the battery, signal and error
+    # icons with a logo and cost every one of them the meaning its icon
+    # carries. This is the entity that IS the mower, so it is the one the
+    # branding belongs to.
+    #
+    # THE COST, STATED RATHER THAN DISCOVERED: a lawn_mower's default icon
+    # tracks its activity, and a fixed picture does not. Docked, mowing and
+    # errored now look identical on a tile that shows only the picture. That is
+    # Joel's call and it is one attribute to remove; the activity is still on
+    # the entity's state, and binary_sensor.<name>_problem still carries the
+    # fault on its own axis, which is where a surface should have been reading
+    # it anyway.
+    _attr_entity_picture = BRAND_ICON_URL
     _attr_supported_features = (
         LawnMowerEntityFeature.START_MOWING
         | LawnMowerEntityFeature.PAUSE

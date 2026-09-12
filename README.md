@@ -1,3 +1,8 @@
+<picture>
+  <source media="(prefers-color-scheme: dark)" srcset="brand/dark_logo.png">
+  <img alt="Segway Navimow" src="brand/logo.png" width="420">
+</picture>
+
 # Navimow
 
 Home Assistant integration for Segway Navimow robot mowers, built against the
@@ -114,6 +119,37 @@ instrument for the first:
 `set_blade_height` is not implemented here, and the SDK's own version does not
 work either: it publishes to `navimow/<id>/command`, which does not match the
 broker's real `/downlink/vehicle/<id>/realtimeDate/*` scheme.
+
+## Branding
+
+`brand/` carries the Segway Navimow mark at the sizes Home Assistant core
+wants: `icon` square at 256/512, `logo` with its short side at 256/512, and a
+`dark_` variant of each because the wordmark is black and would otherwise be
+invisible against every dark theme. Since core **2026.3** a custom integration
+serves its own brand images from that directory — core proxies them at
+`/api/brands/integration/navimow/icon.png`, they take priority over the brands
+CDN, and nothing needs submitting to `home-assistant/brands` or declaring in
+`manifest.json`.
+
+The same served path is the mower entity's `entity_picture`, so any surface
+that renders the entity gets the mark — Home Assistant's own dashboard and an
+external board alike, since it rides on the entity rather than on one
+dashboard's config. It is set on the **mower entity only**: a picture outranks
+an icon, so putting it on the whole set would cost the battery, signal and
+error entities the meaning their icons carry. The trade-off it does make is
+that a `lawn_mower`'s icon normally tracks its activity and a fixed picture
+does not — docked, mowing and errored look alike on a picture-only tile.
+`binary_sensor.<name>_problem` still carries the fault on its own axis.
+
+**HACS still shows a generic icon, and that is not fixable from here.** HACS
+fetches integration icons from `data-v2.hacs.xyz`, which has no entry for
+custom integrations, and it does not fall back to the local brands API —
+[hacs/integration#5171](https://github.com/hacs/integration/issues/5171), open,
+with no documented workaround. The only route to a HACS icon is the legacy
+`custom_integrations/` folder of `home-assistant/brands`.
+
+The marks are Segway's, used to identify the product this integration talks
+to; `brand/` mirrors what the vendor's own integration shipped.
 
 ## Installation
 
