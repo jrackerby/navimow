@@ -28,6 +28,17 @@ CLIENT_ID: Final = "homeassistant"
 CLIENT_SECRET: Final = "57056e15-722e-42be-bbaa-b0cbfb208a52"
 API_BASE_URL: Final = "https://navimow-fra.ninebot.com"
 
+# THE BRAND MARK, SERVED BY HOME ASSISTANT ITSELF, NOT BY US AND NOT BY A CDN.
+# Since core 2026.3 a custom integration ships its own brand images in a
+# `brand/` directory and core proxies them at this path -- so this needs no
+# `www/` write, no `register_static_path`, and no entry in the
+# home-assistant/brands repository. It is a RELATIVE url on purpose: a surface
+# resolves it against whatever origin it reached Home Assistant on, so the same
+# attribute is correct on the local address, through the Nabu Casa relay, and
+# behind a dashboard app's own `/api/*` proxy. An absolute url would pin one of
+# those three and break the other two.
+BRAND_ICON_URL: Final = f"/api/brands/integration/{DOMAIN}/icon.png"
+
 PLATFORMS: Final[list[Platform]] = [
     Platform.BINARY_SENSOR,
     Platform.BUTTON,
