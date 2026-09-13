@@ -53,8 +53,13 @@ subscribes a third MQTT topic it never listened to:
   them.
 - **The MQTT password was logged at INFO** on every setup, masked as
   `first2***last2` — four real characters of a live secret. Nothing derived
-  from a credential is logged here at any level, and `diagnostics.py` redacts
-  rather than masks.
+  from a credential is logged by this component at any level, and
+  `diagnostics.py` redacts rather than masks. The vendor SDK underneath still
+  logs the broker username and the `Authorization` header masked the same way,
+  at INFO in `mower_sdk.mqtt`, so those records are dropped by a filter on that
+  logger — keyed on the format string, not the mask — and
+  `tools/check_sdk_log_lines.py` fails CI the release the SDK adds one the
+  filter cannot see.
 - **`set_blade_height` was registered and raised unconditionally.** A service
   that can only fail still appears in the UI and in every automation picker.
   It is gone rather than ported.

@@ -241,6 +241,34 @@ def test_a_non_websocket_mqtt_url_does_not_veto_a_websocket_host():
               f"{why}: resolved port={port} ws_path={ws_path!r}, not 443 and '/'")
 
 
+def test_a_scheme_less_mqtt_url_is_the_websocket_path():
+    """THE SECOND LIVE DEFECT, on the same X430, one release after the first.
+
+    The cloud sends `mqttHost` = "wss://mqtt-fra.navimow.com" AND `mqttUrl` =
+    "/mqtt/<userId>" -- no scheme, which is why the scheme-driven resolver
+    skipped it and defaulted the path to "/". The gateway in front of the
+    broker answers "/" with 502 and "/mqtt/<anything>" with 101, and paho
+    retries a failed upgrade silently, so broker, port and TLS all read right
+    while the session never once came up. navimow-sdk's own client hands
+    `mqttUrl` to paho verbatim as the websocket path; so does this.
+    """
+    broker, port, ws_path = m.mqtt_endpoint({
+        "mqttHost": "wss://mqtt-fra.navimow.com", "mqttUrl": "/mqtt/6201934",
+    })
+    check((broker, port) == ("mqtt-fra.navimow.com", 443),
+          f"live descriptor resolved {broker!r}:{port}")
+    check(ws_path == "/mqtt/6201934",
+          f"live descriptor resolved ws_path {ws_path!r}; the vendor's path "
+          "field is being ignored and the upgrade goes to '/' (502)")
+    # A path in the URL itself still outranks the bare field.
+    check(m.mqtt_endpoint({"mqttHost": "wss://h/explicit", "mqttUrl": "/other"})[2]
+          == "/explicit",
+          "a path carried by the wss URL no longer wins over the bare field")
+    # And a scheme-less value that is NOT a path is still not guessed at.
+    check(m.mqtt_endpoint({"mqttHost": "wss://h", "mqttUrl": "h:443"})[2] == "/",
+          "a scheme-less host:port mqttUrl is being used as a path")
+
+
 def test_the_descriptor_shape_reveals_no_value():
     """Key names and schemes are publishable; values never are. This is what
     makes the payload readable from a dump instead of reasoned about."""
@@ -261,6 +289,14 @@ def test_the_descriptor_shape_reveals_no_value():
     check(m.mqtt_descriptor_shape({"mqttHost": "plain.example"})["schemes"]
           == {"mqttHost": ""},
           "a scheme-less host does not report as present-with-no-scheme")
+    # Whether mqttUrl is a path is the fact the resolver turns on; it is
+    # published as a boolean because the live path carries the userId.
+    path_shape = m.mqtt_descriptor_shape({"mqttHost": "wss://h", "mqttUrl": "/mqtt/42"})
+    check(path_shape["mqttUrl_is_path"] is True,
+          "a bare-path mqttUrl does not report mqttUrl_is_path")
+    check("42" not in repr(path_shape), "the descriptor shape leaked the path")
+    check(shape["mqttUrl_is_path"] is False,
+          "a scheme-bearing mqttUrl reports as a bare path")
 
 
 def test_a_clean_host_still_takes_the_plain_mqtt_path():
@@ -348,6 +384,23 @@ def test_the_assertions_can_fail():
         m.mqtt_endpoint = original
     if m.mqtt_endpoint({"mqttHost": "wss://x.example"})[0] != "x.example":
         FAILURES.append("SELF-TEST FAILED: could not restore mqtt_endpoint")
+    # The path gate: reinstate the resolver that shipped in 1.2.1 -- scheme
+    # decides, bare mqttUrl ignored, path defaults to "/" -- and assert the
+    # live-shape test trips on it.
+    before = len(FAILURES)
+    try:
+        m.mqtt_endpoint = lambda info: ("mqtt-fra.navimow.com", 443, "/")
+        test_a_scheme_less_mqtt_url_is_the_websocket_path()
+        if len(FAILURES) == before:
+            FAILURES.append(
+                "SELF-TEST FAILED: the 1.2.1 resolver (ws_path always '/') "
+                "produced NO failure, so the path gate cannot detect the "
+                "defect it was written for"
+            )
+        else:
+            del FAILURES[before:]
+    finally:
+        m.mqtt_endpoint = original
 
 
 def main():

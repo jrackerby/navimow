@@ -15,7 +15,7 @@ from typing import Any
 from homeassistant.components.diagnostics import async_redact_data
 from homeassistant.core import HomeAssistant
 
-from . import NavimowConfigEntry
+from . import NavimowConfigEntry, _mask_user_id
 
 # The only `entry.data` keys this component reads; the OAuth helper takes both
 # and nothing here touches `entry.data` anywhere else. Everything beside them
@@ -118,6 +118,22 @@ async def async_get_config_entry_diagnostics(
             "broker": runtime.mqtt_broker,
             "port": runtime.mqtt_port,
             "transport": runtime.mqtt_transport,
+            # THE PATH IS HALF THE ENDPOINT. Broker and port read correct for
+            # a whole release while the session never came up, because the
+            # upgrade was being sent to "/" and the gateway answers that with
+            # 502. The live path carries the account's userId; that segment
+            # is published as a placeholder.
+            "ws_path": _mask_user_id(runtime.mqtt_ws_path, runtime.mqtt_user_id),
+            # paho retries a failed connection silently; this is the only
+            # count of it anywhere. 0 with connected=false means no attempt
+            # has failed YET, which right after setup is not the same as
+            # none failing.
+            "connect_failures": runtime.mqtt_connect_failures,
+            "seconds_since_connect_failure": (
+                round(now - runtime.mqtt_last_connect_failure_monotonic, 1)
+                if runtime.mqtt_last_connect_failure_monotonic is not None
+                else None
+            ),
             # WHAT THE CLOUD ACTUALLY SENT, in the only form that is safe to
             # print: key names and URL schemes, never a value. The endpoint
             # resolver was once corrected against a descriptor shape nobody

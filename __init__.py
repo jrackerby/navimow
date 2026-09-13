@@ -17,6 +17,7 @@ of the OAuth token alone.
 from __future__ import annotations
 
 import logging
+import time
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -64,11 +65,59 @@ class NavimowRuntimeData:
     mqtt_broker: str | None = None
     mqtt_port: int | None = None
     mqtt_transport: str | None = None
+    # The websocket path handed to paho. The live one is "/mqtt/<userId>", so
+    # diagnostics publish it with that segment masked; the id itself is kept
+    # here only to do the masking.
+    mqtt_ws_path: str | None = None
+    mqtt_user_id: str | None = None
     # Key names and URL schemes only -- never a value. model.py says why.
     mqtt_descriptor: dict | None = None
+    # A HANDSHAKE THAT NEVER COMPLETES IS INVISIBLE WITHOUT THESE. paho runs
+    # connect_async in its own thread and, when the TCP/TLS/websocket upgrade
+    # fails, retries silently: no CONNACK, so on_connect never fires, and no
+    # session, so on_disconnect never fires either. Its only word on the
+    # matter is the on_connect_fail callback, which the SDK does not wire.
+    # Counted from there; a session that connected once resets it.
+    mqtt_connect_failures: int = 0
+    mqtt_last_connect_failure_monotonic: float | None = None
 
 
 NavimowConfigEntry = ConfigEntry[NavimowRuntimeData]
+
+
+# THE SDK'S OWN MASKED-CREDENTIAL LINES, AND WHAT IS DONE ABOUT THEM.
+# navimow-sdk's `mower_sdk.mqtt` logs, at INFO, the broker username and the
+# Authorization header rendered as `first2***last2` -- the NavimowHA defect
+# this component's README cites as a reason it exists, one layer down. The
+# lines are silent at default levels and appear the moment anyone raises
+# `mower_sdk` to debug this integration, which is exactly when a log gets
+# pasted into an issue. The SDK cannot be edited from here, so its records
+# are dropped at the logger they are emitted from. Keyed on the FORMAT
+# STRING, not on the mask: a line that would print `username=` or
+# `auth_headers=` at all is refused, whatever the SDK renders into them, so a
+# change to the masking does not reopen the leak. Every other SDK line still
+# passes, so debugging keeps its trace.
+SDK_LOGGERS_FILTERED: tuple[str, ...] = ("mower_sdk.mqtt",)
+SDK_LOG_FORMAT_MARKERS: tuple[str, ...] = ("username=", "auth_headers=")
+
+
+class _NoCredentialFieldsFilter(logging.Filter):
+    """Drop any record whose format string names a credential field."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        message = str(record.msg)
+        return not any(marker in message for marker in SDK_LOG_FORMAT_MARKERS)
+
+
+_SDK_LOG_FILTER = _NoCredentialFieldsFilter()
+
+
+def install_sdk_log_filter() -> None:
+    """Idempotent: a logger filter list tolerates one instance, not a stack."""
+    for name in SDK_LOGGERS_FILTERED:
+        logger = logging.getLogger(name)
+        if _SDK_LOG_FILTER not in logger.filters:
+            logger.addFilter(_SDK_LOG_FILTER)
 
 
 async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
@@ -79,6 +128,7 @@ async def async_setup(hass: HomeAssistant, config: ConfigType) -> bool:
     holds), so importing them here means the user never sees an
     "add application credentials" step for values they cannot change.
     """
+    install_sdk_log_filter()
     await async_import_client_credential(
         hass,
         DOMAIN,
@@ -144,7 +194,10 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
     # logged the broker password at INFO masked as `first2***last2`, which is
     # four real characters of a live secret written to the journal on every
     # setup.
-    _LOGGER.debug("Navimow MQTT endpoint resolved: broker=%s port=%s", broker, port)
+    _LOGGER.debug(
+        "Navimow MQTT endpoint resolved: broker=%s port=%s ws_path=%s",
+        broker, port, _mask_user_id(ws_path, mqtt_info.get("userId")),
+    )
 
     runtime = NavimowRuntimeData(
         sdk=None,
@@ -153,6 +206,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
         mqtt_broker=broker,
         mqtt_port=port,
         mqtt_transport="websocket" if ws_path else "tcp",
+        mqtt_ws_path=ws_path,
+        mqtt_user_id=str(mqtt_info.get("userId") or "") or None,
         mqtt_descriptor=mqtt_descriptor_shape(mqtt_info),
     )
 
@@ -172,6 +227,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
             reconnect_min_delay=MQTT_RECONNECT_MIN_DELAY,
             reconnect_max_delay=MQTT_RECONNECT_MAX_DELAY,
         )
+        _install_session_observers(hass, runtime, sdk)
         sdk.connect()
         return sdk
 
@@ -259,6 +315,11 @@ def _install_credential_refresh(
                     username=info.get("userName"),
                     password=info.get("pwdInfo"),
                 )
+                # update_credentials REBUILDS the paho client when the session
+                # is down, and a new client carries none of the callbacks set
+                # on the old one. Re-attach, or the failure count goes blind
+                # at exactly the moment a refresh was tried.
+                _install_session_observers(hass, runtime, sdk)
 
             await hass.async_add_executor_job(_apply)
             # No credential, masked or otherwise, in this line.
@@ -271,3 +332,54 @@ def _install_credential_refresh(
     # is the line to move; the manifest pins >=0.1.2 and this is the private
     # surface that pin is really protecting.
     sdk._mqtt.on_disconnected = _on_disconnected
+
+
+def _mask_user_id(path: str | None, user_id: object) -> str | None:
+    """The live websocket path is /mqtt/<userId>; publish the shape, not the id."""
+    if not path:
+        return path
+    text = str(user_id or "")
+    return path.replace(text, "<userId>") if text else path
+
+
+def _install_session_observers(
+    hass: HomeAssistant, runtime: NavimowRuntimeData, sdk: Any
+) -> None:
+    """Make a session that never comes up SAY SO, once, and once on recovery.
+
+    Same private reach as `_install_credential_refresh`, for the same reason:
+    the facade forwards no lifecycle hook. Two observers -- paho's own
+    on_connect_fail on the client the SDK built (the only signal a failed
+    upgrade produces at all), and NavimowMQTT.on_connected, which the facade
+    never uses. Called from the paho thread for the first and from the loop
+    for the second; both touch plain ints and log, nothing that needs the
+    loop. INFO on both edges: nobody can edit their way out of a broker that
+    will not answer, so it is the integration reporting its own subject.
+    """
+    mqtt = sdk._mqtt
+    endpoint = "%s:%s%s" % (
+        runtime.mqtt_broker, runtime.mqtt_port,
+        _mask_user_id(runtime.mqtt_ws_path, runtime.mqtt_user_id) or "",
+    )
+
+    def _on_connect_fail(_client: Any, _userdata: Any) -> None:
+        runtime.mqtt_connect_failures += 1
+        runtime.mqtt_last_connect_failure_monotonic = time.monotonic()
+        if runtime.mqtt_connect_failures == 1:
+            _LOGGER.info(
+                "Navimow MQTT session to %s is not coming up: the connection "
+                "or websocket upgrade failed before any CONNACK; paho will "
+                "keep retrying and diagnostics count the attempts",
+                endpoint,
+            )
+
+    async def _on_connected() -> None:
+        if runtime.mqtt_connect_failures:
+            _LOGGER.info(
+                "Navimow MQTT session to %s is up after %d failed attempt(s)",
+                endpoint, runtime.mqtt_connect_failures,
+            )
+        runtime.mqtt_connect_failures = 0
+
+    mqtt.client.on_connect_fail = _on_connect_fail
+    mqtt.on_connected = _on_connected

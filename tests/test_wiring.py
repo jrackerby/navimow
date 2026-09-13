@@ -241,13 +241,53 @@ def test_the_mqtt_session_is_reported_by_diagnostics():
           "they are dead; mqtt_username: null has already been read as proof "
           "that MQTT was unauthenticated")
 
+    # The path is half the endpoint: broker and port read right for a whole
+    # release while the upgrade went to "/" and the gateway answered 502.
+    check('"ws_path"' in diagnostics,
+          "the mqtt block does not report the websocket path, which is the "
+          "half of the endpoint that was wrong last time")
+    check("_mask_user_id(runtime.mqtt_ws_path" in diagnostics,
+          "ws_path is published raw; the live path is /mqtt/<userId>")
+    check('"connect_failures"' in diagnostics,
+          "no connect-failure count: paho retries a failed upgrade silently "
+          "and this is the only place the attempts are visible")
+
     # The reported endpoint must be the one setup RESOLVED, not the entry's
     # inherited copy -- that is the whole point of carrying it on runtime data.
     init = source("__init__.py")
-    for field_name in ("mqtt_broker", "mqtt_port", "mqtt_transport"):
+    for field_name in ("mqtt_broker", "mqtt_port", "mqtt_transport",
+                       "mqtt_ws_path", "mqtt_connect_failures"):
         check(f"{field_name}:" in init or f"{field_name}=" in init,
               f"NavimowRuntimeData does not carry {field_name}, so diagnostics "
               "can only report the entry's inherited value")
+
+
+def test_a_failed_handshake_is_observed():
+    """paho's loop thread swallows a failed TCP/TLS/websocket connect and
+    retries: no CONNACK so on_connect never fires, no session so
+    on_disconnect never fires. Its one signal is on_connect_fail, which the
+    SDK does not wire. The component wires it on the client the SDK built,
+    wires NavimowMQTT.on_connected for the recovery edge, and -- because
+    update_credentials REBUILDS that client when the session is down --
+    re-attaches both after every credential refresh."""
+    init = code_only(source("__init__.py"))
+    check("on_connect_fail" in init,
+          "__init__.py never sets paho's on_connect_fail; a failed handshake "
+          "is silent again")
+    check("on_connected" in init,
+          "__init__.py never sets NavimowMQTT.on_connected; recovery goes unlogged")
+    check(init.count("_install_session_observers(") >= 3,
+          "_install_session_observers is not re-run after "
+          "update_mqtt_credentials -- the rebuilt paho client carries no "
+          "callbacks from the old one")
+    apply_block = init[init.index("def _apply()"):]
+    apply_block = apply_block[:apply_block.index("await hass.async_add_executor_job(_apply)")]
+    check("update_mqtt_credentials(" in apply_block
+          and "_install_session_observers(" in apply_block
+          and apply_block.index("update_mqtt_credentials(")
+          < apply_block.index("_install_session_observers("),
+          "the observers are not re-attached AFTER update_mqtt_credentials "
+          "inside _apply, where the client is rebuilt")
 
 
 def test_the_brand_assets_exist_and_meet_core_s_sizes():
@@ -346,7 +386,15 @@ def test_no_credential_reaches_a_log_line():
     """NavimowHA logged the MQTT password at INFO as `first2***last2` --
     four real characters of a live secret, on every setup.
     Partial masking is not redaction, so the gate is on the NAME appearing
-    anywhere in a logging call, not on whether it looked masked."""
+    anywhere in a logging call, not on whether it looked masked.
+
+    THIS SWEEP STOPS AT THE COMPONENT BOUNDARY. It reads the .py files in
+    this directory and nothing under site-packages, so it cannot see a
+    dependency doing the thing it forbids -- and navimow-sdk does, at INFO,
+    in `mower_sdk.mqtt`. Those lines are handled by the logger filter that
+    test_the_sdk_credential_lines_are_filtered exercises, and the CI imports
+    job runs tools/check_sdk_log_lines.py against the SDK actually installed
+    so a bump that moves or adds such a line fails there, not here."""
     secrets = ("pwdInfo", "userName", "password", "client_secret",
                "access_token", "refresh_token", "_mask_secret")
     for name in sorted(os.listdir(COMPONENT)):
@@ -363,6 +411,101 @@ def test_no_credential_reaches_a_log_line():
                       f"{name}: a _LOGGER.{match.group(1)} call references "
                       f"{secret!r}. Masking is not redaction -- keep it out of "
                       "the log entirely.")
+
+
+# navimow-sdk 0.1.2, mower_sdk/mqtt.py: the three format strings that render
+# `_mask_secret(self.username)` and `_format_auth_headers(self.auth_headers)`
+# into a log line. Pinned here as fixtures of the pinned SDK; the CI imports
+# job re-derives the live set from the installed package.
+SDK_0_1_2_CREDENTIAL_LINES = (
+    "MQTT connect details (sync): transport=%s broker=%s port=%s ws_path=%s "
+    "tls=%s username=%s auth_headers=%s",
+    "MQTT connect details (async): transport=%s broker=%s port=%s ws_path=%s "
+    "tls=%s username=%s auth_headers=%s device=%s",
+    "NavimowMQTT connect details: transport=%s broker=%s port=%s ws_path=%s "
+    "tls=%s username=%s auth_headers=%s",
+)
+SDK_0_1_2_HARMLESS_LINES = (
+    "NavimowMQTT connecting: broker=%s port=%s ws_path=%s",
+    "NavimowMQTT connected: broker=%s port=%s",
+    "NavimowMQTT disconnected: broker=%s port=%s rc=%s",
+    "MQTT connection failed: rc=%s",
+)
+
+
+def sdk_log_filter_namespace():
+    """The filter and its constants, lifted out of __init__.py by AST.
+
+    __init__.py imports homeassistant, which this suite deliberately runs
+    without, so the class is executed on its own: real code, not a copy of
+    it -- a re-implementation here would be a second filter that tests
+    itself.
+    """
+    import logging
+    tree = ast.parse(source("__init__.py"))
+    wanted = []
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == "_NoCredentialFieldsFilter":
+            wanted.append(node)
+        elif isinstance(node, ast.FunctionDef) and node.name == "install_sdk_log_filter":
+            wanted.append(node)
+        elif isinstance(node, (ast.Assign, ast.AnnAssign)):
+            target = node.targets[0] if isinstance(node, ast.Assign) else node.target
+            if isinstance(target, ast.Name) and target.id in (
+                "SDK_LOGGERS_FILTERED", "SDK_LOG_FORMAT_MARKERS", "_SDK_LOG_FILTER"
+            ):
+                wanted.append(node)
+    module = ast.Module(body=wanted, type_ignores=[])
+    ast.fix_missing_locations(module)
+    namespace = {"logging": logging, "__name__": "navimow_filter_under_test"}
+    exec(compile(module, "__init__.py", "exec"), namespace)
+    return namespace
+
+
+def test_the_sdk_credential_lines_are_filtered():
+    """The SDK's masked-credential INFO lines never reach a handler.
+
+    Exercised against the real filter class with the real format strings of
+    the pinned SDK: every credential line is dropped, every harmless line
+    passes, and installation is idempotent (a reload must not stack a second
+    copy). Keyed on the format string so a change to the SDK's masking does
+    not reopen the leak."""
+    import logging
+    ns = sdk_log_filter_namespace()
+    for name in ("_NoCredentialFieldsFilter", "install_sdk_log_filter",
+                 "SDK_LOGGERS_FILTERED", "SDK_LOG_FORMAT_MARKERS"):
+        check(name in ns, f"__init__.py no longer defines {name}")
+    if any(n not in ns for n in ("_NoCredentialFieldsFilter", "install_sdk_log_filter")):
+        return
+    check("mower_sdk.mqtt" in ns["SDK_LOGGERS_FILTERED"],
+          "mower_sdk.mqtt, the logger that emits the lines, is not filtered")
+    flt = ns["_NoCredentialFieldsFilter"]()
+
+    def record(msg):
+        return logging.LogRecord("mower_sdk.mqtt", logging.INFO, "mqtt.py", 1, msg, (), None)
+
+    for line in SDK_0_1_2_CREDENTIAL_LINES:
+        check(flt.filter(record(line)) is False,
+              f"the SDK line {line[:40]!r}... passes the filter")
+    for line in SDK_0_1_2_HARMLESS_LINES:
+        check(flt.filter(record(line)) is True,
+              f"the harmless SDK line {line[:40]!r}... is dropped; debugging "
+              "loses its trace")
+    # Installed from async_setup, and only once however often it runs.
+    init = code_only(source("__init__.py"))
+    setup_body = init[init.index("async def async_setup("):init.index("async def async_setup_entry(")]
+    check("install_sdk_log_filter()" in setup_body,
+          "async_setup does not install the SDK log filter")
+    target = logging.getLogger("mower_sdk.mqtt")
+    saved = list(target.filters)
+    try:
+        target.filters = []
+        ns["install_sdk_log_filter"]()
+        ns["install_sdk_log_filter"]()
+        check(len(target.filters) == 1,
+              f"install_sdk_log_filter stacked {len(target.filters)} filters")
+    finally:
+        target.filters = saved
 
 
 def test_the_always_failing_service_is_gone():
@@ -478,6 +621,18 @@ def test_the_assertions_can_fail():
         FAILURES.append(
             "SELF-TEST FAILED: the mqtt-session gate cannot see is_connected"
         )
+    # The SDK log filter must be able to PASS something and to DROP
+    # something, or its gate reads green over a filter that returns a
+    # constant. Both edges, on the real class.
+    import logging
+    ns = sdk_log_filter_namespace()
+    if "_NoCredentialFieldsFilter" in ns:
+        flt = ns["_NoCredentialFieldsFilter"]()
+        rec = lambda m: logging.LogRecord("x", logging.INFO, "x", 1, m, (), None)  # noqa: E731
+        if flt.filter(rec("auth: username=%s")) is not False:
+            FAILURES.append("SELF-TEST FAILED: the SDK log filter passes a username= line")
+        if flt.filter(rec("connected: broker=%s")) is not True:
+            FAILURES.append("SELF-TEST FAILED: the SDK log filter drops a harmless line")
 
 
 def main():
