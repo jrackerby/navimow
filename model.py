@@ -234,10 +234,26 @@ def mqtt_endpoint(mqtt_info: dict) -> tuple[str | None, int, str | None]:
 
     So the scheme decides, wherever it is written. A field carrying one is
     parsed; only a field carrying none is treated as a hostname.
+
+    AND A SCHEME-LESS `mqttUrl` IS THE WEBSOCKET PATH, NOT NOISE. That is the
+    vendor's own contract: navimow-sdk's `MowerClient.async_refresh_mqtt_info`
+    takes `mqttHost` as the `wss://` host and hands `mqttUrl` to paho
+    VERBATIM as `ws_path`. Measured live on the same X430, once the value was
+    finally read rather than reasoned about: `mqttHost` =
+    "wss://mqtt-fra.navimow.com", `mqttUrl` = "/mqtt/<userId>". The resolver
+    that fixed the scheme defect skipped that field for carrying no scheme
+    and defaulted the path to "/", and the gateway in front of the broker
+    (an Azure Application Gateway) answers "/" with 502 and "/mqtt/<anything>"
+    with 101. paho retries a failed upgrade silently in its own thread, so
+    the endpoint was right, the port was right, TLS was right, and the
+    session still never came up -- with no CONNACK and no disconnect to say
+    why. A path that begins with "/" is taken as the path; anything else
+    scheme-less is still not guessed at.
     """
     host = mqtt_info.get("mqttHost")
     # A host with no scheme is the only thing that may be used as a hostname.
     bare_host = host if host and "://" not in host else None
+    url_path = _bare_ws_path(mqtt_info.get("mqttUrl"))
 
     # EVERY FIELD THAT COULD CARRY ONE IS TRIED, AND A FIELD THAT DOES NOT
     # YIELD ONE IS SKIPPED RATHER THAN FATAL. This loop replaces a version
@@ -258,11 +274,28 @@ def mqtt_endpoint(mqtt_info: dict) -> tuple[str | None, int, str | None]:
         # Prefer a clean mqttHost when there is one; fall back to the hostname
         # the URL carried. Preferring mqttHost unconditionally is what produced
         # the `wss://`-prefixed broker handed to a TCP connect.
-        return bare_host or hostname, port, path or "/"
+        # The URL's own path wins when it has one; then the vendor's path
+        # field; "/" only when neither said anything.
+        return bare_host or hostname, port, path or url_path or "/"
 
     # No websocket endpoint in any field. Plain MQTT, but ONLY on a host we can
     # actually hand to a TCP connect -- never a scheme-bearing string.
     return bare_host, 1883, None
+
+
+def _bare_ws_path(value: object) -> str | None:
+    """A scheme-less `mqttUrl` that begins with "/" is a websocket path.
+
+    Nothing else scheme-less is interpreted: "host:port" is not a path and
+    would not be one on the wire either, and the resolver has already been
+    corrected once against a shape nobody had read.
+    """
+    if not value:
+        return None
+    text = str(value)
+    if "://" in text or not text.startswith("/"):
+        return None
+    return text
 
 
 def mqtt_descriptor_shape(mqtt_info: dict) -> dict:
@@ -290,7 +323,14 @@ def mqtt_descriptor_shape(mqtt_info: dict) -> dict:
         # "" means the field is present and carries no scheme at all -- a bare
         # hostname. That is a different finding from the field being absent.
         schemes[field] = scheme or ""
-    return {"keys": keys, "schemes": schemes}
+    # Whether the scheme-less mqttUrl is a PATH is the one shape fact the
+    # resolver above turns on, so the dump says so -- as a boolean, not a
+    # value: the live path carries the account's userId.
+    return {
+        "keys": keys,
+        "schemes": schemes,
+        "mqttUrl_is_path": _bare_ws_path(mqtt_info.get("mqttUrl")) is not None,
+    }
 
 
 def _urlparse(value: str) -> tuple[str | None, str | None, int | None, str, str]:

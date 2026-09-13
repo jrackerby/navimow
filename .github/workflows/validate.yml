@@ -126,6 +126,13 @@ jobs:
           test -n "$REQS" || { echo "CANNOT RUN: manifest declares no requirements, but this component has always had at least one -- the parse, not the manifest, is probably wrong"; exit 1; }
           echo "$REQS" | xargs -r pip install
 
+      # The component's log filter is proven in tests/ against format strings
+      # PINNED from one SDK release. This re-derives the set from the SDK pip
+      # just installed, so a bump that moves or adds a credential-bearing line
+      # fails here rather than leaking the day someone turns debug on.
+      - name: every credential-bearing SDK log line is filtered
+        run: python tools/check_sdk_log_lines.py
+
       - name: import every module against real core
         run: |
           set -euo pipefail
