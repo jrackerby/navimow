@@ -173,14 +173,14 @@ jobs:
           echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
           echo "This is a VOID, not a pass."
 
-      # Runs for real the moment this repository is public. `brands` stays
-      # ignored: it needs either brand/icon.png committed here or an accepted
-      # PR against home-assistant/brands, and neither exists yet. `topics` and
-      # `license` are NOT ignored -- they are repository metadata this repo
-      # now satisfies, and ignoring a check that would pass is how a gate
-      # quietly stops being one.
+      # Runs for real, with NOTHING ignored. `brands` was the last exemption
+      # and it is spent: hacs/integration's validate/brands.py reads
+      # brand/icon.png out of the tree (root, under content_in_root) and only
+      # asks home-assistant/brands when that file is absent. It has been
+      # committed since the brand landed, so an `ignore:` here was hiding a
+      # green gate -- and the default-store submission requires a run without
+      # one. `topics` and `license` were never ignored for the same reason.
       - uses: hacs/action@main
         if: ${{ !github.event.repository.private }}
         with:
           category: integration
-          ignore: brands
