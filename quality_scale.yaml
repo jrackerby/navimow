@@ -25,11 +25,7 @@ rules:
       State is MQTT push. The 15-minute coordinator interval refreshes the
       OAuth token and drives the stale-push check; it is not a state poll.
       NavimowHA ran it at 30s, i.e. 2,880 token refreshes a day.
-  brands:
-    status: todo
-    comment: >-
-      No accepted PR against home-assistant/brands for this domain. The vendor
-      repo ships brand artwork but that is not the same thing.
+  brands: done  # brand/ served by core's own BrandsIntegrationView; HACS reads brand/icon.png
   common-modules: { status: done, comment: coordinator.py and entity.py. }
   config-flow: { status: done }
   config-flow-test-coverage:
