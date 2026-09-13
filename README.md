@@ -232,4 +232,4 @@ above deliberately run with core absent.
 
 What they do **not** cover is stated in each file's docstring;
 `quality_scale.yaml` records which quality-scale rules are met and which four
-are still `todo`.
+are still `todo`; the standard itself is `jrackerby/HA` LAW §15.
