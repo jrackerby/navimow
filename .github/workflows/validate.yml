@@ -23,58 +23,16 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  hassfest:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      # Into a subdirectory ON PURPOSE -- the staging step below builds the
-      # layout hassfest expects AT THE WORKSPACE ROOT and cannot do that if the
-      # repo is already checked out there.
-      - uses: actions/checkout@v4
-        with:
-          path: src
-
-      # home-assistant/actions/hassfest takes no path input: it scans
-      # custom_components/* under the workspace. This repo keeps the
-      # integration at its ROOT (hacs.json content_in_root) because
-      # that is the layout HACS installs from, as custom_components/navimow.
-      - name: stage the custom_components layout hassfest scans
-        run: |
-          set -euo pipefail
-          mkdir -p "custom_components/$DOMAIN"
-          cp -a src/. "custom_components/$DOMAIN/"
-          rm -rf "custom_components/$DOMAIN/.git" \
-                 "custom_components/$DOMAIN/.github" \
-                 "custom_components/$DOMAIN/tests" \
-                 "custom_components/$DOMAIN/tools"
-          test -f "custom_components/$DOMAIN/manifest.json" \
-            || { echo "CANNOT RUN: staging produced no manifest.json -- hassfest would pass vacuously"; exit 1; }
-          echo "staged $(find "custom_components/$DOMAIN" -type f | wc -l) files"
-
-      # What this does NOT do, so nobody reads more into a green run than is
-      # there: hassfest's validate_iqs_file opens with `if not integration.core:
-      # return`, so quality_scale.yaml goes unread for a custom component while
-      # the manifest schema still ACCEPTS a quality_scale key. A tier declared
-      # there is a self-claim with no gate behind it.
-      - uses: home-assistant/actions/hassfest@master
-
-  tests:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.13"
-
-      # NO homeassistant install here, and no vendor SDK either. model.py
-      # imports neither, and the other two suites parse the source by AST and
-      # by text rather than importing it -- which is why a red result here is
-      # attributable to a decision in this repo rather than to a core release
-      # or a navimow-sdk bump moving underneath it. The imports job below is
-      # where real core has its say.
-      - name: run every suite
-        run: ./tools/run_tests.sh
+  # hassfest, hacs and the shared tests/imports jobs run in
+  # jrackerby/gha-workflows validate-integration.yml (workflow_call);
+  # master's required contexts are "validate / <job>" (jrackerby/HA#821).
+  validate:
+    uses: jrackerby/gha-workflows/.github/workflows/validate-integration.yml@master
+    with:
+      domain: "navimow"
+      public: true
+      test-requirements: ""
+      run-imports: false
 
   imports:
     # The gate the pure-layer suites above cannot be: every module except
@@ -162,32 +120,3 @@ jobs:
               sys.exit(f"{len(failed)} module(s) failed to import against real core")
           print(f"imported {len(mods) + 1} modules cleanly")
           PY
-
-  hacs:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-
-      # VOID -- NOT A PASS, AND NOT A FAILURE OF THIS REPO. HACS fetches
-      # hacs.json and manifest.json from raw.githubusercontent.com with NO
-      # Authorization header, in CI and in a live install alike, so a private
-      # repository 404s. Reporting it VOID keeps the distinction that matters:
-      # the check did not run, so nothing was proven either way.
-      - name: VOID -- HACS validation cannot run against a private repository
-        if: ${{ github.event.repository.private }}
-        run: |
-          echo "::notice title=HACS validation VOID::this repository is private, so HACS cannot read it"
-          echo "This is a VOID, not a pass."
-
-      # Runs for real, with NOTHING ignored. `brands` was the last exemption
-      # and it is spent: hacs/integration's validate/brands.py reads
-      # brand/icon.png out of the tree (root, under content_in_root) and only
-      # asks home-assistant/brands when that file is absent. It has been
-      # committed since the brand landed, so an `ignore:` here was hiding a
-      # green gate -- and the default-store submission requires a run without
-      # one. `topics` and `license` were never ignored for the same reason.
-      - uses: hacs/action@main
-        if: ${{ !github.event.repository.private }}
-        with:
-          category: integration
