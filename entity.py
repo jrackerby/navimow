@@ -79,5 +79,16 @@ class NavimowEntity(CoordinatorEntity[NavimowCoordinator]):
 
     @property
     def _device_online(self) -> bool | None:
+        """The `authList` flag, read ONCE at setup and never refreshed.
+
+        Kept because `True` is still usable evidence, but it is a setup-time
+        reading, not a live one -- model.is_reachable carries the measurement
+        that forced that distinction.
+        """
         device = self.coordinator.device
         return getattr(device, "online", None)
+
+    @property
+    def _mqtt_push_is_recent(self) -> bool:
+        """Live evidence the cloud is in contact with this mower."""
+        return self.coordinator.mqtt_push_is_recent()

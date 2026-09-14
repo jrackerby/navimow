@@ -80,6 +80,10 @@ class NavimowRuntimeData:
     # Counted from there; a session that connected once resets it.
     mqtt_connect_failures: int = 0
     mqtt_last_connect_failure_monotonic: float | None = None
+    # WHEN THE DEVICE RECORD WAS READ, because it is read exactly once and
+    # `online` comes off it. Without an age beside it, a stale boolean in a
+    # dump is indistinguishable from a live one, and it was read as live.
+    devices_read_monotonic: float | None = None
 
 
 NavimowConfigEntry = ConfigEntry[NavimowRuntimeData]
@@ -203,6 +207,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
         sdk=None,
         api=api,
         devices=devices,
+        devices_read_monotonic=time.monotonic(),
         mqtt_broker=broker,
         mqtt_port=port,
         mqtt_transport="websocket" if ws_path else "tcp",

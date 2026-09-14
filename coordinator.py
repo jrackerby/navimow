@@ -69,6 +69,36 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._last_state: Any | None = None
         self._last_attributes: Any | None = None
         self._last_mqtt_update: float | None = None
+
+        # PER-CHANNEL, BECAUSE ONE TIMESTAMP ACROSS THREE CHANNELS CANNOT
+        # ANSWER THE QUESTION THIS COMPONENT EXISTS TO ANSWER. `attributes`
+        # is an undocumented free-form channel and the only place a mowing
+        # schedule or a blade figure could still be arriving; `_last_state`
+        # being None told us nothing about whether a frame had EVER landed
+        # on it, because a single shared `seconds_since_mqtt_push` moves on
+        # every `state` frame and so reads healthy while `attributes` is
+        # silent. Counted separately, a dump distinguishes "never published"
+        # from "published and empty" from "published before we were
+        # listening" without anybody having to be standing next to the mower.
+        #
+        # NEVER ZERO FOR "NOTHING ARRIVED": the count starts at 0 and the
+        # timestamp starts at None, and it is the timestamp that carries the
+        # never/just-now distinction.
+        self._frames: dict[str, int] = {"state": 0, "attributes": 0, "event": 0}
+        self._frame_last: dict[str, float | None] = {
+            "state": None, "attributes": None, "event": None,
+        }
+        # The poll path reads the SDK's own cache, so a frame can reach
+        # `_last_attributes` without this object's callback ever running.
+        # Counted apart, or "0 frames but attributes present" would read as a
+        # contradiction when it is just the other door.
+        #
+        # COUNTS PAYLOADS, NOT POLLS. The SDK keeps serving the same cached
+        # object until a new frame replaces it, so incrementing on every poll
+        # that found something would count the poll interval and print a
+        # figure that looks like a frame count sitting next to a real one.
+        # Gated on object identity, so it moves only when the payload does.
+        self._cache_pickups: dict[str, int] = {"state": 0, "attributes": 0}
         self._last_http_fetch: float | None = None
         self._last_data_source: str | None = None
 
@@ -168,11 +198,15 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
         cached_state = self.sdk.get_cached_state(self.device.id)
         if cached_state is not None:
+            if cached_state is not self._last_state:
+                self._cache_pickups["state"] += 1
             self._last_state = cached_state
             self._last_data_source = "mqtt_cache"
 
         cached_attrs = self.sdk.get_cached_attributes(self.device.id)
         if cached_attrs is not None:
+            if cached_attrs is not self._last_attributes:
+                self._cache_pickups["attributes"] += 1
             self._last_attributes = cached_attrs
 
         now = time.monotonic()
@@ -217,21 +251,34 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         """SDK callback. Runs on the MQTT thread -- hop to the event loop."""
         if state.device_id != self.device.id:
             return
-        self._last_mqtt_update = time.monotonic()
+        self._note_frame("state")
         self.hass.loop.call_soon_threadsafe(self._apply_state, state)
 
     def _handle_attributes(self, attrs: Any) -> None:
         if attrs.device_id != self.device.id:
             return
-        self._last_mqtt_update = time.monotonic()
+        self._note_frame("attributes")
         self.hass.loop.call_soon_threadsafe(self._apply_attributes, attrs)
 
     def _handle_event(self, event: Any) -> None:
         """The channel NavimowHA left unsubscribed."""
         if event.device_id != self.device.id:
             return
-        self._last_mqtt_update = time.monotonic()
+        self._note_frame("event")
         self.hass.loop.call_soon_threadsafe(self._apply_event, event)
+
+    def _note_frame(self, channel: str) -> None:
+        """One MQTT frame landed. Runs on the MQTT thread.
+
+        `_last_mqtt_update` stays the newest across all three channels --
+        that is what the HTTP-fallback staleness gate is asking about, and it
+        should not start fetching over REST merely because `attributes` has
+        never spoken.
+        """
+        now = time.monotonic()
+        self._last_mqtt_update = now
+        self._frames[channel] = self._frames.get(channel, 0) + 1
+        self._frame_last[channel] = now
 
     def _apply_state(self, state: Any) -> None:
         self._last_state = state
@@ -257,6 +304,49 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
 
     def get_device_attributes(self) -> Any | None:
         return (self.data or {}).get("attributes")
+
+    def mqtt_frame_counts(self) -> dict[str, int]:
+        """Frames received per MQTT channel since setup."""
+        return dict(self._frames)
+
+    def mqtt_cache_pickups(self) -> dict[str, int]:
+        """Times the poll found a frame in the SDK cache rather than here."""
+        return dict(self._cache_pickups)
+
+    def mqtt_seconds_since_frame(self, now: float | None = None) -> dict[str, float | None]:
+        """Per channel: seconds since its last frame, or None if never.
+
+        None, never 0. A channel that has published nothing since setup is a
+        different finding from one that published a moment ago, and on the
+        `attributes` channel it is the entire finding.
+        """
+        current = time.monotonic() if now is None else now
+        return {
+            channel: (round(current - last, 1) if last is not None else None)
+            for channel, last in self._frame_last.items()
+        }
+
+    def mqtt_push_is_recent(self, now: float | None = None) -> bool:
+        """Has the cloud pushed a STATE frame for this device recently?
+
+        Positive evidence that the cloud is in live contact with this mower,
+        which is the question binary_sensor.<name>_connectivity is asking.
+        Gated on the `state` channel alone: `attributes` and `event` are
+        occasional by nature and their silence is not a reachability finding.
+
+        THE DECAY IS NOT INSTANT AND THAT IS STATED RATHER THAN HIDDEN. This
+        window is MQTT_STALE_SECONDS but nothing re-renders the entity except
+        a coordinator update, and while pushes are arriving each one renders
+        it. The gap only opens when pushes STOP -- then the reading stands
+        until the next poll, up to UPDATE_INTERVAL_SECONDS later. That is a
+        bounded lag on a value that previously could not move at all;
+        shortening the poll is a separate decision with its own cost.
+        """
+        last = self._frame_last.get("state")
+        if last is None:
+            return False
+        current = time.monotonic() if now is None else now
+        return (current - last) <= MQTT_STALE_SECONDS
 
     # -- once-only logging ------------------------------------------------
 
