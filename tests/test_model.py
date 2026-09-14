@@ -123,10 +123,45 @@ def test_reachability_is_a_separate_axis():
           "is_reachable('unknown', None) must be False -- that is the offline state")
     check(m.is_reachable("mowing", None) is True,
           "a mowing mower with no explicit online flag is reachable")
-    check(m.is_reachable("mowing", False) is False,
-          "an explicit online=False outranks an activity reading")
     check(m.is_reachable(None, None) is None,
           "is_reachable(None, None) must be None -- 'we were not told' is not 'offline'")
+    check(m.is_reachable("mowing", True) is True,
+          "an explicit online=True is still positive evidence")
+
+
+def test_a_setup_time_false_no_longer_manufactures_offline():
+    """THE REVERSAL, PINNED. `device_online is False` used to outrank every
+    other signal. It cannot any more, and this is the case that forced it:
+    the flag is read once at setup and never refreshed, so it read False
+    unbroken through two complete mowing sessions on 2026-09-12 while the
+    mower was cutting grass. mower_sdk's `data.get("online", False)` also
+    collapses an ABSENT key into the same False, so the value cannot be told
+    apart from silence at this layer.
+    """
+    check(m.is_reachable("mowing", False) is True,
+          "a mower reporting 'mowing' must not read unreachable on a "
+          "setup-time online=False -- that flag cannot move and it was "
+          "False through two real mowing sessions")
+    check(m.is_reachable("docked", False) is True,
+          "a docked mower with an ambiguous online=False is not a "
+          "reachability finding either")
+    check(m.is_reachable("unknown", False) is False,
+          "'unknown' is still the canonical offline state and still reads off")
+
+
+def test_a_live_push_outranks_every_stale_signal():
+    """A state frame pushed for this device inside the staleness window is
+    the cloud saying it is in contact with the mower. Nothing older outranks
+    it -- that is the point of preferring it."""
+    check(m.is_reachable("unknown", False, True) is True,
+          "a live push must outrank a stale 'unknown': the cloud is "
+          "demonstrably in contact with this mower")
+    check(m.is_reachable(None, None, True) is True,
+          "a live push is a reading even when nothing else is")
+    check(m.is_reachable(None, None, False) is None,
+          "no push is not a negative reading -- absence stays None")
+    check(m.is_reachable("mowing", None) is True,
+          "the push argument is optional and its default changes nothing")
 
 
 def test_charging_is_separable_from_docked():
@@ -363,6 +398,38 @@ def test_the_assertions_can_fail():
     # Prove the restore worked, or every test after this one is meaningless.
     if m.resolve_activity("unknown") is not None:
         FAILURES.append("SELF-TEST FAILED: could not restore CANONICAL_TO_ACTIVITY")
+    # The reachability gate: reinstate the rule that shipped through 1.4.0 --
+    # an explicit online=False outranks everything -- and assert the new
+    # tests trip on it. Without this the reversal is asserted by tests that
+    # have never been shown capable of failing.
+    before = len(FAILURES)
+    original_reachable = m.is_reachable
+
+    def _pre_reversal(state, online, push=None):
+        if state == "unknown":
+            return False
+        if online is not None:
+            return bool(online)
+        if state is None:
+            return None
+        return True
+
+    try:
+        m.is_reachable = _pre_reversal
+        test_a_setup_time_false_no_longer_manufactures_offline()
+        test_a_live_push_outranks_every_stale_signal()
+        if len(FAILURES) == before:
+            FAILURES.append(
+                "SELF-TEST FAILED: the pre-reversal is_reachable (online=False "
+                "outranks everything, no push argument) produced NO failure, so "
+                "these gates cannot detect the defect they were written for"
+            )
+        else:
+            del FAILURES[before:]
+    finally:
+        m.is_reachable = original_reachable
+    if m.is_reachable("mowing", False) is not True:
+        FAILURES.append("SELF-TEST FAILED: could not restore is_reachable")
 
     # And the endpoint gate: reintroduce the live defect -- hand the host
     # back untouched -- and assert the check notices. A gate over a resolver

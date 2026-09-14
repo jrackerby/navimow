@@ -262,6 +262,142 @@ def test_the_mqtt_session_is_reported_by_diagnostics():
               "can only report the entry's inherited value")
 
 
+def test_each_mqtt_channel_is_counted_separately():
+    """ONE TIMESTAMP ACROSS THREE CHANNELS ANSWERS THE WRONG QUESTION.
+
+    `seconds_since_mqtt_push` moves on every `state` frame, and `state` is
+    the channel that is always busy. So it reads healthy while `attributes`
+    -- the only carrier a mowing schedule or a blade figure could still be
+    on, and the sole open question left on this component -- has published
+    nothing whatsoever. For three releases a dump could not distinguish
+    "attributes never published" from "published and empty" from "published
+    before this entry was listening", and each round of that question cost a
+    production restart to re-ask.
+
+    Counted per channel it costs nothing and answers all three. The
+    timestamps must stay None-for-never rather than 0: on this channel the
+    difference between "nothing has ever arrived" and "something arrived
+    just now" IS the finding.
+    """
+    coordinator = source("coordinator.py")
+    diagnostics = source("diagnostics.py")
+    code = code_only(coordinator)
+    # BY AST, NOT BY TEXT. code_only() drops STRING tokens, so the channel
+    # name inside _note_frame("state") is invisible to a substring gate, and
+    # matching the raw text instead would be satisfied by this docstring.
+    # The structure is what is being asserted anyway: the handler for each
+    # channel must itself record a frame for that channel.
+    tree = ast.parse(coordinator)
+    counted = {}
+    for node in ast.walk(tree):
+        if not isinstance(node, ast.FunctionDef) or not node.name.startswith("_handle_"):
+            continue
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "_note_frame"
+                and call.args
+                and isinstance(call.args[0], ast.Constant)
+            ):
+                counted[node.name] = call.args[0].value
+    for channel in ("state", "attributes", "event"):
+        handler = f"_handle_{channel}"
+        check(counted.get(handler) == channel,
+              f"{handler} does not call _note_frame({channel!r}), so a dump "
+              f"cannot say whether the {channel} channel has ever published")
+    check("mqtt_frames" in diagnostics and "seconds_since_frame" in diagnostics,
+          "diagnostics.py publishes no per-channel frame counts, so the "
+          "attributes channel's silence is still uninterpretable without "
+          "somebody standing next to the mower")
+    check("mqtt_cache_pickups" in diagnostics,
+          "the poll path reads the SDK's own cache without the callback "
+          "running; uncounted, zero frames beside a present payload reads "
+          "as a contradiction when it is just the other door")
+    # Again by AST: the initialiser's values are what matter and code_only()
+    # cannot see the keys. Every channel's last-seen must start at None.
+    initial = {}
+    for node in ast.walk(tree):
+        # AnnAssign, because the initialiser carries a type annotation --
+        # an Assign-only walk finds nothing here and reports it as absent.
+        targets = (
+            node.targets if isinstance(node, ast.Assign)
+            else [node.target] if isinstance(node, ast.AnnAssign)
+            else []
+        )
+        if (
+            isinstance(getattr(node, "value", None), ast.Dict)
+            and any(
+                isinstance(t, ast.Attribute) and t.attr == "_frame_last"
+                for t in targets
+            )
+        ):
+            initial = {
+                k.value: (v.value if isinstance(v, ast.Constant) else "not-a-constant")
+                for k, v in zip(node.value.keys, node.value.values)
+                if isinstance(k, ast.Constant)
+            }
+    check(set(initial) == {"state", "attributes", "event"}
+          and all(v is None for v in initial.values()),
+          "per-channel last-seen must exist for all three channels and start "
+          "at None, never 0 -- never-arrived and just-arrived are the two "
+          f"answers this has to separate; found {initial!r}")
+
+
+def test_reachability_does_not_rest_on_a_frozen_flag():
+    """`device.online` IS READ ONCE AT SETUP AND NEVER REFRESHED.
+
+    It therefore cannot move, and it read `off` unbroken through two
+    complete mowing sessions on 2026-09-12 -- a monitor reporting its
+    subject unreachable while the subject was demonstrably working. A
+    monitor whose blind spot correlates with what it monitors is worse than
+    none, and this one's blind spot was then read back as evidence that the
+    mower was asleep, which is what deferred the attributes characterisation
+    for three rounds.
+
+    So the connectivity axis must consult live push evidence, and the dump
+    must print the flag's age and its ambiguity beside it.
+    """
+    binary = source("binary_sensor.py")
+    entity = code_only(source("entity.py"))
+    diagnostics = source("diagnostics.py")
+    # BY AST. A substring gate for "mqtt_recent" is satisfied by any one of
+    # the three lambdas mentioning it, including the two that ignore it --
+    # which is exactly the connectivity axis staying broken while the gate
+    # reads green. What has to be true is narrower: the lambda that resolves
+    # is_reachable must take the live-push argument AND hand it on.
+    passes_push = False
+    for node in ast.walk(ast.parse(binary)):
+        if not isinstance(node, ast.Lambda):
+            continue
+        for call in ast.walk(node):
+            if (
+                isinstance(call, ast.Call)
+                and isinstance(call.func, ast.Name)
+                and call.func.id == "is_reachable"
+            ):
+                names = {a.arg for a in node.args.args}
+                passed = {a.id for a in call.args if isinstance(a, ast.Name)}
+                passes_push = bool(names & passed - {"state", "online", "error"})
+    check(passes_push,
+          "the connectivity lambda does not hand live push evidence to "
+          "is_reachable, so the axis still rests on a setup-time flag that "
+          "cannot move -- and read `off` through two real mowing sessions")
+    check("mqtt_push_is_recent" in entity,
+          "entity.py exposes no live-push reading for the connectivity axis")
+    check("_mqtt_push_is_recent" in code_only(source("binary_sensor.py")),
+          "NavimowBinarySensor.is_on never reads the live-push property, so "
+          "nothing reaches the lambda that expects it")
+    check('"device_record_age_seconds"' in diagnostics,
+          "the dump prints `online` with no age beside it, so a stale "
+          "boolean is indistinguishable from a live one -- and it was read "
+          "as live")
+    check('"online_is_ambiguous"' in diagnostics,
+          "mower_sdk parses this as data.get('online', False), so an absent "
+          "key and a vendor-asserted offline are the same False; a dump that "
+          "does not say so invites the reading that was already made")
+
+
 def test_a_failed_handshake_is_observed():
     """paho's loop thread swallows a failed TCP/TLS/websocket connect and
     retries: no CONNACK so on_connect never fires, no session so

@@ -39,9 +39,14 @@ PARALLEL_UPDATES = 0
 
 @dataclass(frozen=True, kw_only=True)
 class NavimowBinaryDescription(BinarySensorEntityDescription):
-    """A binary reading. `value_fn` takes (canonical_state, error, online)."""
+    """A binary reading.
 
-    value_fn: Callable[[str | None, dict | None, bool | None], bool | None]
+    `value_fn` takes (canonical_state, error, online, mqtt_push_is_recent).
+    The fourth is live push evidence: `online` alone is a setup-time reading
+    that cannot move, and it read `off` straight through two mowing sessions.
+    """
+
+    value_fn: Callable[[str | None, dict | None, bool | None, bool], bool | None]
     # True for the one entity that must survive its subject going away.
     always_available: bool = False
 
@@ -51,14 +56,16 @@ BINARY_SENSORS: tuple[NavimowBinaryDescription, ...] = (
         key=KEY_PROBLEM,
         translation_key=KEY_PROBLEM,
         device_class=BinarySensorDeviceClass.PROBLEM,
-        value_fn=lambda state, error, online: is_problem(error, state),
+        value_fn=lambda state, error, online, mqtt_recent: is_problem(error, state),
     ),
     NavimowBinaryDescription(
         key=KEY_CONNECTIVITY,
         translation_key=KEY_CONNECTIVITY,
         device_class=BinarySensorDeviceClass.CONNECTIVITY,
         entity_category=EntityCategory.DIAGNOSTIC,
-        value_fn=lambda state, error, online: is_reachable(state, online),
+        value_fn=lambda state, error, online, mqtt_recent: is_reachable(
+            state, online, mqtt_recent
+        ),
         # THE ONE EXCEPTION TO entity.py's AVAILABILITY RULE, and it is the
         # rule's own reasoning applied: this entity's whole job is to say the
         # mower is unreachable, so it may not vanish when the mower becomes
@@ -70,7 +77,7 @@ BINARY_SENSORS: tuple[NavimowBinaryDescription, ...] = (
         key=KEY_CHARGING,
         translation_key=KEY_CHARGING,
         device_class=BinarySensorDeviceClass.BATTERY_CHARGING,
-        value_fn=lambda state, error, online: is_charging(state),
+        value_fn=lambda state, error, online, mqtt_recent: is_charging(state),
     ),
 )
 
@@ -109,5 +116,5 @@ class NavimowBinarySensor(NavimowEntity, BinarySensorEntity):
         state = self._state
         error = getattr(state, "error", None) if state is not None else None
         return self.entity_description.value_fn(
-            self._canonical_state, error, self._device_online
+            self._canonical_state, error, self._device_online, self._mqtt_push_is_recent
         )

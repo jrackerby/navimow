@@ -93,21 +93,50 @@ def resolve_activity(canonical_state: str | None) -> str | None:
     return CANONICAL_TO_ACTIVITY.get(canonical_state)
 
 
-def is_reachable(canonical_state: str | None, device_online: bool | None) -> bool | None:
+def is_reachable(
+    canonical_state: str | None,
+    device_online: bool | None,
+    mqtt_push_is_recent: bool | None = None,
+) -> bool | None:
     """Is the mower itself reachable by the CLOUD?
 
     Distinct from whether WE can reach the cloud -- that is availability, and
     it is handled by the coordinator's last_update_success. This answers only
     the question the cloud is answering for us.
 
-    Returns None when neither signal is present, so 'we were not told' does
-    not silently render as 'offline' -- `ok at zero` and `could not read` are
+    Returns None when no signal is present, so 'we were not told' does not
+    silently render as 'offline' -- `ok at zero` and `could not read` are
     different values at the source.
+
+    REVERSAL, LABELLED. Until now an explicit `device_online is False`
+    outranked every other signal and resolved this to `off`. It no longer
+    does, and `False` is treated as no signal at all. Two measurements
+    force it:
+
+      * `device_online` is READ ONCE, at setup, off the `authList` device
+        record, and is never refreshed for the life of the entry. It cannot
+        move, so it reported `off` unbroken across two complete mowing
+        sessions on 2026-09-12 -- a mower cutting grass while the entity
+        said the cloud could not see it.
+      * mower_sdk's `Device.from_dict` is `data.get("online", False)`, so an
+        ABSENT key and a vendor-asserted offline arrive here as the same
+        `False`. Name the benign state that produces the same output: this
+        one is indistinguishable at this layer, which makes `False`
+        unusable as evidence. `True` stays usable -- an absent key can
+        never produce it.
+
+    So reachability is now ASSERTED from live evidence and denied only from
+    a reading that means it: a state frame pushed for this device inside the
+    staleness window is the cloud telling us it is in contact with the mower,
+    and `unknown` is the canonical offline state. `False` on its own no
+    longer manufactures an `off`.
     """
+    if mqtt_push_is_recent:
+        return True
     if canonical_state == "unknown":
         return False
-    if device_online is not None:
-        return bool(device_online)
+    if device_online is True:
+        return True
     if canonical_state is None:
         return None
     return True

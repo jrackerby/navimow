@@ -57,6 +57,23 @@ async def async_get_config_entry_diagnostics(
                 "model": coordinator.device.model,
                 "firmware_version": coordinator.device.firmware_version,
                 "online": getattr(coordinator.device, "online", None),
+                # `online` IS NOT A LIVE READING AND `False` IS NOT A READING
+                # AT ALL. It comes off the `authList` device record, read once
+                # at setup and never refreshed, and mower_sdk parses it as
+                # `data.get("online", False)` -- so an absent key and a
+                # vendor-asserted offline are the same value here. It reported
+                # `false` unbroken through two complete mowing sessions on
+                # 2026-09-12 and was read, in this issue's own history, as
+                # proof the mower was asleep and therefore that the silence on
+                # `attributes` could not be interpreted. Both facts are printed
+                # beside it so the next reader is not owed the archaeology.
+                "online_is_ambiguous": getattr(coordinator.device, "online", None)
+                is False,
+                "device_record_age_seconds": (
+                    round(now - runtime.devices_read_monotonic, 1)
+                    if runtime.devices_read_monotonic is not None
+                    else None
+                ),
                 "last_update_success": coordinator.last_update_success,
                 "source": (coordinator.data or {}).get("source"),
                 "state": async_redact_data(state.to_dict(), TO_REDACT)
@@ -91,6 +108,24 @@ async def async_get_config_entry_diagnostics(
                 "seconds_since_mqtt_push": (
                     round(now - last_push, 1) if last_push is not None else None
                 ),
+                # PER CHANNEL, WHICH IS THE WHOLE QUESTION. The figure above
+                # moves on every `state` frame, so it reads healthy while
+                # `attributes` -- the only carrier a mowing schedule or a
+                # blade figure could still be on -- has published nothing at
+                # all. Split out, one dump separates the three answers that
+                # `attributes_present: false` collapses into one: never
+                # published, published empty, or published before this entry
+                # was listening. Read `seconds_since_frame.attributes` FIRST:
+                # None means the channel has never spoken since setup, and
+                # `device_record_age_seconds` says how long that has been.
+                "mqtt_frames": coordinator.mqtt_frame_counts(),
+                "seconds_since_frame": coordinator.mqtt_seconds_since_frame(now),
+                # The poll reads the SDK's own cache, so a frame can reach the
+                # coordinator without its callback running. Counted apart, or
+                # zero frames beside a present payload reads as a contradiction
+                # when it is just the other door.
+                "mqtt_cache_pickups": coordinator.mqtt_cache_pickups(),
+                "mqtt_push_is_recent": coordinator.mqtt_push_is_recent(now),
             }
         )
     return {
