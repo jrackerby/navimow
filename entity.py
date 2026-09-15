@@ -52,9 +52,12 @@ class NavimowEntity(CoordinatorEntity[NavimowCoordinator]):
             name=device.name,
             manufacturer="Navimow",
             model=device.model or None,
-            # ALWAYS None ON 0.1.2: the vendor's key is `firmware`, the SDK
-            # reads `firmware_version` (measured 2026-09-14, model.py). Left
-            # in place so a fixed SDK lights it up without a change here.
+            # ONE ACCESSOR, WHICHEVER KEY FILLED IT. The SDK reads
+            # `firmware_version` and the vendor sends `firmware`, so through
+            # 1.6.2 this was permanently None. `__init__._async_read_devices`
+            # now fills the SDK's own field off the raw record at setup, so
+            # this line is unchanged and a fixed SDK changes nothing here
+            # either; the dump records which key supplied it.
             sw_version=device.firmware_version or None,
             serial_number=device.serial_number or device.id,
             connections=(

@@ -372,6 +372,98 @@ def test_an_unusable_descriptor_refuses_rather_than_guessing():
               "setup would connect somewhere nobody verified")
 
 
+# -- HTTP fallback gating ---------------------------------------------------
+
+# The live values, from const.py. Copied rather than imported: const.py
+# imports `homeassistant.const`, which this suite deliberately does not have.
+HTTP_FALLBACK_MIN_INTERVAL = 3600
+MQTT_STALE_SECONDS = 300
+
+
+def test_the_unattended_poll_still_obeys_both_gates():
+    """THE FLOOR IS NOT BEING REMOVED, ONLY BYPASSED ON DEMAND.
+
+    An unforced refresh must behave exactly as 1.6.2 did: no read while MQTT
+    is fresh, and no read inside the hourly floor. A fix that quietly turned
+    the fallback into a poll would pass a test that only checked the command
+    case, and a broker outage would then hammer the cloud every 15 minutes.
+    """
+    check(
+        m.should_http_fetch(
+            forced=False, mqtt_is_stale=False,
+            seconds_since_http_fetch=None, min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is False,
+        "an unforced refresh fetched over HTTP while MQTT was fresh -- the "
+        "pushed state is the better reading and this is a paid-for call",
+    )
+    check(
+        m.should_http_fetch(
+            forced=False, mqtt_is_stale=True,
+            seconds_since_http_fetch=HTTP_FALLBACK_MIN_INTERVAL - 1,
+            min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is False,
+        "an unforced refresh fetched inside the hourly floor -- a broker "
+        "outage would turn the fallback into a poll of its own",
+    )
+    check(
+        m.should_http_fetch(
+            forced=False, mqtt_is_stale=True,
+            seconds_since_http_fetch=HTTP_FALLBACK_MIN_INTERVAL + 1,
+            min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is True,
+        "the fallback did not fire with MQTT stale and the floor expired -- "
+        "that is the one case it exists for",
+    )
+    check(
+        m.should_http_fetch(
+            forced=False, mqtt_is_stale=True,
+            seconds_since_http_fetch=None, min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is True,
+        "a never-fetched coordinator with stale MQTT refused to take its "
+        "first HTTP read -- None must not read as `fetched just now`",
+    )
+
+
+def test_a_command_clears_both_gates_not_just_the_hourly_one():
+    """#28's measurement, as an assertion.
+
+    2026-09-15: `lawn_mower.start_mowing` at 10:08 EDT was accepted, the mower
+    left the dock, and the entity read `docked` until a config-entry reload
+    forced a fresh HTTP read at 10:16. The follow-up refresh every command
+    schedules had run and read nothing.
+
+    BOTH GATES, because clearing only the floor leaves the same symptom behind
+    the other one: the follow-up refresh fires seconds after the command, and
+    any frame on any channel inside MQTT_STALE_SECONDS makes `mqtt_is_stale`
+    False for the whole of that window.
+    """
+    check(
+        m.should_http_fetch(
+            forced=True, mqtt_is_stale=True,
+            seconds_since_http_fetch=60, min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is True,
+        "a commanded refresh was refused by the hourly floor -- the mower can "
+        "then stay invisible for up to an hour whenever push is silent",
+    )
+    check(
+        m.should_http_fetch(
+            forced=True, mqtt_is_stale=False,
+            seconds_since_http_fetch=60, min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is True,
+        "a commanded refresh was refused by the staleness gate -- which is "
+        "shut for the first five minutes after any frame, i.e. for exactly "
+        "the window a command's follow-up read runs in",
+    )
+    check(
+        m.should_http_fetch(
+            forced=True, mqtt_is_stale=False,
+            seconds_since_http_fetch=0, min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ) is True,
+        "a commanded refresh was refused immediately after another read; the "
+        "mark is an owed read and nothing else may veto it",
+    )
+
+
 def test_the_assertions_can_fail():
     """Every assertion set needs a self-test proving it CAN fail.
 
@@ -455,6 +547,43 @@ def test_the_assertions_can_fail():
         m.mqtt_endpoint = original
     if m.mqtt_endpoint({"mqttHost": "wss://x.example"})[0] != "x.example":
         FAILURES.append("SELF-TEST FAILED: could not restore mqtt_endpoint")
+
+    # The fallback gate: reinstate 1.6.2's decision -- `mqtt_stale and
+    # may_fetch`, with nothing a command can say -- and assert the command
+    # test trips on it while the unattended-poll test stays green. Both
+    # halves matter: a self-test that only proved the first would pass over a
+    # "fix" that removed the floor entirely.
+    before = len(FAILURES)
+    original_gate = m.should_http_fetch
+    try:
+        m.should_http_fetch = lambda forced, mqtt_is_stale, seconds_since_http_fetch, min_interval: (  # noqa: E501
+            mqtt_is_stale
+            and (seconds_since_http_fetch is None or seconds_since_http_fetch > min_interval)
+        )
+        test_a_command_clears_both_gates_not_just_the_hourly_one()
+        if len(FAILURES) == before:
+            FAILURES.append(
+                "SELF-TEST FAILED: 1.6.2's gate (no forced bypass at all) "
+                "produced NO failure, so this suite cannot detect the defect "
+                "#28 measured"
+            )
+        else:
+            del FAILURES[before:]
+        before = len(FAILURES)
+        test_the_unattended_poll_still_obeys_both_gates()
+        if len(FAILURES) != before:
+            FAILURES.append(
+                "SELF-TEST FAILED: the unattended-poll gate failed against "
+                "1.6.2's own decision, which it is supposed to preserve "
+                "exactly -- the test, not the fix, is wrong"
+            )
+            del FAILURES[before:-1]
+    finally:
+        m.should_http_fetch = original_gate
+    if m.should_http_fetch(
+        forced=True, mqtt_is_stale=False, seconds_since_http_fetch=0, min_interval=3600
+    ) is not True:
+        FAILURES.append("SELF-TEST FAILED: could not restore should_http_fetch")
     # The path gate: reinstate the resolver that shipped in 1.2.1 -- scheme
     # decides, bare mqttUrl ignored, path defaults to "/" -- and assert the
     # live-shape test trips on it.

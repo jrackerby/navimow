@@ -55,9 +55,16 @@ async def async_get_config_entry_diagnostics(
             {
                 "id_present": bool(device_id),
                 "model": coordinator.device.model,
-                # Empty on SDK 0.1.2: the vendor sends `firmware`, the SDK
-                # reads `firmware_version` (measured 2026-09-14, model.py).
                 "firmware_version": coordinator.device.firmware_version,
+                # AN EMPTY firmware_version HAS THREE CAUSES AND THEY NEED
+                # OPPOSITE FIXES. The SDK reads `firmware_version` and the
+                # vendor sends `firmware`, so setup fills the SDK's field off
+                # the raw record; this says which key did it. "sdk" means a
+                # fixed SDK finally maps it, "vendor_firmware_key" means this
+                # component did, "absent" means the record carried neither --
+                # a vendor change, not ours -- and null means the raw read was
+                # not available at all and the parsed-only path ran.
+                "firmware_source": runtime.device_firmware_source.get(device_id),
                 # NO `online` KEY IS PRINTED, BECAUSE NONE IS SENT. The raw
                 # `authList` record was read on 2026-09-14 and carries
                 # exactly `firmware`, `id`, `model`, `name`; the SDK's
@@ -122,6 +129,13 @@ async def async_get_config_entry_diagnostics(
                 # when it is just the other door.
                 "mqtt_cache_pickups": coordinator.mqtt_cache_pickups(),
                 "mqtt_push_is_recent": coordinator.mqtt_push_is_recent(now),
+                # WHEN THE HOURLY FLOOR NEXT OPENS, and the only way to read a
+                # command's forced fetch out of a dump: `source:
+                # http_fallback` beside a small age here is a read this
+                # component paid for on purpose. None means no HTTP read has
+                # ever succeeded for this device, which is a different finding
+                # from one taken a moment ago.
+                "seconds_since_http_fetch": coordinator.seconds_since_http_fetch(now),
             }
         )
     return {

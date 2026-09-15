@@ -123,7 +123,14 @@ class NavimowLawnMower(NavimowEntity, LawnMowerEntity):
         # The mower answers the command over MQTT within a second or two, so
         # this is belt-and-braces for the case where push is down and the
         # entity would otherwise sit on a stale activity until the next poll.
-        await self.coordinator.async_request_refresh()
+        #
+        # IT MUST BE THE COMMAND REFRESH, NOT THE PLAIN ONE. A plain
+        # `async_request_refresh()` here was refused by the coordinator's own
+        # HTTP fallback gates and read nothing: measured 2026-09-15, a start
+        # accepted at 10:08 left the entity on `docked` for eight minutes
+        # while the mower mowed. coordinator.async_request_command_refresh
+        # carries the reasoning and the price.
+        await self.coordinator.async_request_command_refresh()
 
     async def async_start_mowing(self) -> None:
         """START from rest, RESUME from paused -- they are different commands.
