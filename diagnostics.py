@@ -192,6 +192,9 @@ async def async_get_config_entry_diagnostics(
             "topics": {
                 _mask_device_ids(topic, runtime.devices): {
                     "frames": record["frames"],
+                    # Copies the broker sent twice for overlapping
+                    # subscriptions; dropped before the SDK saw them.
+                    "duplicates": record.get("duplicates", 0),
                     "seconds_since_frame": (
                         round(now - record["last_monotonic"], 1)
                         if record["last_monotonic"] is not None

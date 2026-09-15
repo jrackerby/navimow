@@ -98,7 +98,9 @@ instrument for the first:
   topic the SDK never subscribed shows up there; a channel that never
   speaks does not. Read `mqtt.wildcard_granted` first — `false` means the
   broker refused every wildcard and the census is the three guessed topics
-  again. `mqtt.subscriptions` carries the broker's SUBACK verdict for every
+  again. The three stay subscribed beside a granted wildcard — a grant is not
+  proof the gateway routes wildcard matches — and a byte-identical second
+  copy is counted under `duplicates`, never forwarded. `mqtt.subscriptions` carries the broker's SUBACK verdict for every
   topic subscribed, the SDK's three included — a refused topic and a granted
   one that never speaks used to read identically.
 
