@@ -466,6 +466,14 @@ def test_the_vehicle_namespace_is_enumerated_not_guessed():
     check("client.on_subscribe = " in init,
           "__init__.py never watches the wildcard's SUBACK, so a refused "
           "wildcard reads as an empty namespace")
+    check("client.subscribe = " in init and "sdk_subscribe(" in init,
+          "__init__.py does not wrap paho's subscribe, so the SDK's three "
+          "SUBACKs cannot be tied back to their topics and a refused "
+          "`attributes` reads as a quiet channel")
+    check('"subscriptions"' in diagnostics,
+          "diagnostics.py never prints the per-topic SUBACK verdicts")
+    check('realtimeDate/+"' in raw,
+          "__init__.py tries no single-level wildcard after `#` is refused")
     check(".unsubscribe(" in init,
           "__init__.py never drops the SDK's guessed topics after the wildcard "
           "is granted; overlapping subscriptions can double every frame count")
