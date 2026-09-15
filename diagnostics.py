@@ -170,6 +170,37 @@ async def async_get_config_entry_diagnostics(
             # resolver was once corrected against a descriptor shape nobody
             # had read, and the correction was wrong about the real one.
             "descriptor": runtime.mqtt_descriptor,
+            # THE NAMESPACE, NOT THE GUESS. The SDK's three subscriptions are
+            # its own reading of the vendor's topic layout, so `mqtt_frames`
+            # above can only count what was guessed at. This is every frame
+            # the broker delivered under `/downlink/vehicle/<id>/#`, by the
+            # topic it arrived on, with the union of top-level payload key
+            # names -- so a topic the SDK never heard of shows up here, and
+            # whether anything schedule- or blade-shaped is on the wire is
+            # read off the names. `wildcard_granted: false` means the broker
+            # refused the wildcard and this is the three topics again.
+            "wildcard_granted": runtime.mqtt_wildcard_granted,
+            "topics": {
+                _mask_device_ids(topic, runtime.devices): {
+                    "frames": record["frames"],
+                    "seconds_since_frame": (
+                        round(now - record["last_monotonic"], 1)
+                        if record["last_monotonic"] is not None
+                        else None
+                    ),
+                    "payload_keys": sorted(record["keys"]),
+                }
+                for topic, record in sorted(runtime.mqtt_topic_census.items())
+            },
         },
         "devices": devices,
     }
+
+
+def _mask_device_ids(topic: str, devices: list[Any]) -> str:
+    """A topic carries the vehicle serial; publish the shape, not the serial."""
+    for device in devices:
+        device_id = str(getattr(device, "id", "") or "")
+        if device_id:
+            topic = topic.replace(device_id, "<deviceId>")
+    return topic

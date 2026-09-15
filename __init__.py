@@ -16,6 +16,7 @@ of the OAuth token alone.
 
 from __future__ import annotations
 
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -84,6 +85,22 @@ class NavimowRuntimeData:
     # `model`/`name`/`firmware_version` come off it. Without an age beside
     # them, a stale field in a dump is indistinguishable from a live one.
     devices_read_monotonic: float | None = None
+    # WHAT THE BROKER ACTUALLY PUBLISHES FOR THIS VEHICLE, per topic. The
+    # SDK subscribes three topics it GUESSED (`realtimeDate/state`, `event`,
+    # `attributes` -- its topic helpers still carry the author's own TODO
+    # to "adjust to the real format"), so a silent `attributes` never said
+    # whether the channel is quiet or does not exist. The session now takes
+    # the vehicle's whole `/downlink/vehicle/<id>/#` namespace and every
+    # frame is counted here by the topic it arrived on, with the union of
+    # its top-level payload KEY NAMES beside it -- names only, never a value,
+    # which is enough to say whether anything schedule- or blade-shaped is
+    # on the wire and nothing else. Keyed by topic; each record carries
+    # `frames`, `last_monotonic` and `keys`.
+    mqtt_topic_census: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # None until the broker answers the wildcard SUBACK; False when it
+    # refused (the SDK's three topics then stay in force and the census
+    # sees only those). Reported, so a thin census is void, not clean.
+    mqtt_wildcard_granted: bool | None = None
 
 
 NavimowConfigEntry = ConfigEntry[NavimowRuntimeData]
@@ -388,3 +405,124 @@ def _install_session_observers(
 
     mqtt.client.on_connect_fail = _on_connect_fail
     mqtt.on_connected = _on_connected
+    _install_topic_census(runtime, mqtt)
+
+
+# The three topics navimow-sdk subscribes on every CONNACK. They are its
+# guess at the vendor's namespace, and the wildcard below covers all three,
+# so once the broker grants the wildcard they are dropped: a broker MAY
+# deliver one copy per matching subscription, and a second copy of every
+# `state` frame would inflate `mqtt_frames` -- the instrument that proved
+# the session live -- by exactly two.
+SDK_GUESSED_CHANNELS: tuple[str, ...] = ("state", "event", "attributes")
+VEHICLE_TOPIC_PREFIX: str = "/downlink/vehicle/"
+
+
+def _vehicle_wildcard(device_id: str) -> str:
+    return f"{VEHICLE_TOPIC_PREFIX}{device_id}/#"
+
+
+def _sdk_guessed_topics(device_id: str) -> list[str]:
+    return [
+        f"{VEHICLE_TOPIC_PREFIX}{device_id}/realtimeDate/{channel}"
+        for channel in SDK_GUESSED_CHANNELS
+    ]
+
+
+def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
+    """Listen to the vehicle's whole namespace and count what arrives, by topic.
+
+    Two hooks on the paho client the SDK built. `on_message` is WRAPPED, not
+    replaced: the SDK's own handler still runs for every frame, so nothing
+    the entities read changes; the wrapper only records topic, count, age
+    and top-level key names first. It is installed once per client -- the
+    marker guards a re-install onto a client that was not rebuilt, which
+    would otherwise count every frame twice. `on_subscribe` watches for the
+    wildcard's SUBACK and, on a grant, unsubscribes the three guessed
+    topics; a refusal is recorded and leaves them alone, so a broker that
+    will not take wildcards costs nothing that worked before.
+    """
+    client = mqtt.client
+    device_ids = [
+        str(getattr(device, "id", "") or "")
+        for device in runtime.devices
+        if getattr(device, "id", None)
+    ]
+    pending: dict[int, str] = {}
+
+    if not getattr(client.on_message, "_navimow_census", False):
+        sdk_on_message = client.on_message
+
+        def _on_message(_client: Any, _userdata: Any, msg: Any) -> None:
+            record = runtime.mqtt_topic_census.setdefault(
+                msg.topic, {"frames": 0, "last_monotonic": None, "keys": set()}
+            )
+            record["frames"] += 1
+            record["last_monotonic"] = time.monotonic()
+            try:
+                payload = json.loads((msg.payload or b"").decode("utf-8"))
+            except (ValueError, UnicodeDecodeError):
+                payload = None
+            if isinstance(payload, dict):
+                record["keys"].update(str(key) for key in payload)
+            else:
+                # A frame that is not a JSON object is still a frame; say
+                # what shape it had rather than counting it as keyless.
+                record["keys"].add(f"<{type(payload).__name__}>")
+            if sdk_on_message is not None:
+                sdk_on_message(_client, _userdata, msg)
+
+        _on_message._navimow_census = True  # type: ignore[attr-defined]
+        client.on_message = _on_message
+
+    def _on_subscribe(
+        _client: Any, _userdata: Any, mid: int, granted: Any, *_args: Any
+    ) -> None:
+        topic = pending.pop(mid, None)
+        if topic is None:
+            return
+        codes = list(granted) if isinstance(granted, (list, tuple)) else [granted]
+        refused = any(
+            getattr(code, "is_failure", False)
+            or (isinstance(code, int) and code >= 128)
+            for code in codes
+        )
+        if refused:
+            if runtime.mqtt_wildcard_granted is not False:
+                _LOGGER.info(
+                    "Navimow broker refused the vehicle wildcard subscription; "
+                    "the topic census sees only the SDK's three guessed topics"
+                )
+            runtime.mqtt_wildcard_granted = False
+            return
+        runtime.mqtt_wildcard_granted = True
+        device_id = topic[len(VEHICLE_TOPIC_PREFIX):-len("/#")]
+        _client.unsubscribe(_sdk_guessed_topics(device_id))
+
+    client.on_subscribe = _on_subscribe
+
+    # The SDK subscribes its three on the paho thread inside on_connect and
+    # only then schedules on_connected onto the loop, which is where the
+    # session observers above run. Chaining the wildcard onto that edge puts
+    # it after the SDK's own subscriptions on every CONNACK, reconnects
+    # included, so the narrowing is redone each time the SDK redoes its part.
+    # A re-install onto an unreset hook would chain wrapper onto wrapper and
+    # subscribe the wildcard once per install; unwrap our own first.
+    previous_on_connected = mqtt.on_connected
+    if getattr(previous_on_connected, "_navimow_census", False):
+        previous_on_connected = previous_on_connected._previous
+
+    async def _on_connected_subscribe_wildcard() -> None:
+        if previous_on_connected is not None:
+            await previous_on_connected()
+        for device_id in device_ids:
+            topic = _vehicle_wildcard(device_id)
+            result, mid = client.subscribe(topic)
+            if result == 0 and mid is not None:
+                pending[mid] = topic
+            elif runtime.mqtt_wildcard_granted is None:
+                runtime.mqtt_wildcard_granted = False
+
+    _on_connected_subscribe_wildcard._navimow_census = True  # type: ignore[attr-defined]
+    _on_connected_subscribe_wildcard._previous = previous_on_connected  # type: ignore[attr-defined]
+    mqtt.on_connected = _on_connected_subscribe_wildcard

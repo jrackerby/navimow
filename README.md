@@ -90,6 +90,16 @@ instrument for the first:
   already know which ones matter. Download diagnostics after a real mowing
   session to see what is actually on it.
 
+  That topic is navimow-sdk's *guess* at the vendor's layout (its topic
+  helpers still carry the author's TODO to adjust to the real format), so
+  the session also takes the vehicle's whole `/downlink/vehicle/<id>/#`
+  namespace and the dump's `mqtt.topics` counts every frame by the topic it
+  actually arrived on, with the union of its top-level payload key names. A
+  topic the SDK never subscribed shows up there; a channel that never
+  speaks does not. Read `mqtt.wildcard_granted` first — `false` means the
+  broker refused the wildcard and the census is the three guessed topics
+  again.
+
   Read the dump's `mqtt.connected` and `seconds_since_mqtt_push` before
   concluding anything from an empty `attributes`. A docked mower sleeps and
   publishes nothing, which produces a dump identical to a dead broker session;
