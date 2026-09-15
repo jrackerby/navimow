@@ -449,6 +449,50 @@ def test_a_failed_handshake_is_observed():
           "inside _apply, where the client is rebuilt")
 
 
+def test_the_vehicle_namespace_is_enumerated_not_guessed():
+    """navimow-sdk subscribes three topics it guessed at, so a silent
+    `attributes` never said whether the channel is quiet or does not exist.
+    The component takes the whole `/downlink/vehicle/<id>/#` namespace,
+    counts every frame by the topic it arrived on with its payload key names,
+    drops the SDK's three once the wildcard is granted (a broker may deliver
+    one copy per matching subscription), and prints the census in
+    diagnostics -- names only, never a value."""
+    raw = source("__init__.py")
+    init = code_only(raw)
+    diagnostics = source("diagnostics.py")
+    check('/#"' in raw,
+          "__init__.py never subscribes a vehicle wildcard; the census can only "
+          "see the three topics the SDK guessed")
+    check("client.on_subscribe = " in init,
+          "__init__.py never watches the wildcard's SUBACK, so a refused "
+          "wildcard reads as an empty namespace")
+    check(".unsubscribe(" in init,
+          "__init__.py never drops the SDK's guessed topics after the wildcard "
+          "is granted; overlapping subscriptions can double every frame count")
+    check("._navimow_census = True" in init
+          and 'getattr(client.on_message, "_navimow_census"' in raw,
+          "the on_message wrapper is not marked and guarded, so a re-install "
+          "onto an unrebuilt client wraps twice and counts every frame twice")
+    check("sdk_on_message(" in init,
+          "the on_message wrapper does not forward to the SDK's handler; the "
+          "entities would go blind the moment the census is installed")
+    census_block = init[init.index("def _on_message("):]
+    census_block = census_block[:census_block.index("def _on_subscribe(")]
+    # code_only drops string literals, so the subscript reads `record[ ]`.
+    check(re.search(r"record\[\s*\]\.update\(", census_block) is not None,
+          "the census records no payload key names; the dump cannot say what "
+          "shape a frame had")
+    check('"wildcard_granted"' in diagnostics and '"topics"' in diagnostics,
+          "diagnostics.py never prints the census or whether the wildcard was "
+          "granted; a thin census reads clean instead of void")
+    check('"payload_keys"' in diagnostics,
+          "diagnostics.py prints the census without payload key names, which "
+          "is the one thing the characterisation needs")
+    diag_code = code_only(diagnostics)
+    check("_mask_device_ids(" in diag_code,
+          "diagnostics.py prints census topics with the vehicle serial in them")
+
+
 def test_the_brand_assets_exist_and_meet_core_s_sizes():
     """Core 2026.3+ serves a custom integration's OWN brand/ directory.
 
