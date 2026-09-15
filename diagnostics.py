@@ -180,6 +180,15 @@ async def async_get_config_entry_diagnostics(
             # read off the names. `wildcard_granted: false` means the broker
             # refused the wildcard and this is the three topics again.
             "wildcard_granted": runtime.mqtt_wildcard_granted,
+            # THE BROKER'S VERDICT ON EACH SUBSCRIPTION, the SDK's three
+            # included. The `#` wildcard was refused on the live broker, and
+            # nothing before this could say whether `realtimeDate/attributes`
+            # was ever granted either -- a refused topic and a granted one
+            # that never speaks read identically. "sent" means no SUBACK yet.
+            "subscriptions": {
+                _mask_device_ids(topic, runtime.devices): verdict
+                for topic, verdict in sorted(runtime.mqtt_subscriptions.items())
+            },
             "topics": {
                 _mask_device_ids(topic, runtime.devices): {
                     "frames": record["frames"],

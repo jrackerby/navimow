@@ -97,8 +97,10 @@ instrument for the first:
   actually arrived on, with the union of its top-level payload key names. A
   topic the SDK never subscribed shows up there; a channel that never
   speaks does not. Read `mqtt.wildcard_granted` first — `false` means the
-  broker refused the wildcard and the census is the three guessed topics
-  again.
+  broker refused every wildcard and the census is the three guessed topics
+  again. `mqtt.subscriptions` carries the broker's SUBACK verdict for every
+  topic subscribed, the SDK's three included — a refused topic and a granted
+  one that never speaks used to read identically.
 
   Read the dump's `mqtt.connected` and `seconds_since_mqtt_push` before
   concluding anything from an empty `attributes`. A docked mower sleeps and

@@ -101,6 +101,19 @@ class NavimowRuntimeData:
     # refused (the SDK's three topics then stay in force and the census
     # sees only those). Reported, so a thin census is void, not clean.
     mqtt_wildcard_granted: bool | None = None
+    # EVERY SUBSCRIPTION'S SUBACK VERDICT, BY TOPIC -- the SDK's three
+    # included. paho hands back a mid per subscribe and a granted-qos list
+    # per SUBACK; the SDK discards the mid and wires no on_subscribe, so a
+    # topic the broker REFUSED (0x80) has always been indistinguishable from
+    # a topic it granted that never speaks. The first wildcard tried came
+    # back refused, which is exactly the answer this map exists to give for
+    # each of the three the SDK guessed. Values: "sent" until the SUBACK,
+    # then "granted qos<n>" or "refused".
+    mqtt_subscriptions: dict[str, str] = field(default_factory=dict)
+    # mid -> topic(s) awaiting a SUBACK. Lives here, not in a closure: the
+    # subscribe wrapper survives a re-install while the on_subscribe hook is
+    # replaced, and the two must read one map or the verdict is dropped.
+    mqtt_pending_subacks: dict[int, str] = field(default_factory=dict)
 
 
 NavimowConfigEntry = ConfigEntry[NavimowRuntimeData]
@@ -418,8 +431,20 @@ SDK_GUESSED_CHANNELS: tuple[str, ...] = ("state", "event", "attributes")
 VEHICLE_TOPIC_PREFIX: str = "/downlink/vehicle/"
 
 
-def _vehicle_wildcard(device_id: str) -> str:
-    return f"{VEHICLE_TOPIC_PREFIX}{device_id}/#"
+# Tried in order; the first one granted narrows the SDK's three away. `#`
+# was refused by the live broker (v1.6.0's first dump), so the single-level
+# `realtimeDate/+` is the fallback: it still covers the three and answers
+# whether the ACL is on the depth or on the whole namespace.
+def _vehicle_wildcards(device_id: str) -> list[str]:
+    return [
+        f"{VEHICLE_TOPIC_PREFIX}{device_id}/#",
+        f"{VEHICLE_TOPIC_PREFIX}{device_id}/realtimeDate/+",
+    ]
+
+
+def _wildcard_device_id(topic: str) -> str:
+    rest = topic[len(VEHICLE_TOPIC_PREFIX):]
+    return rest.split("/", 1)[0]
 
 
 def _sdk_guessed_topics(device_id: str) -> list[str]:
@@ -437,10 +462,12 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
     the entities read changes; the wrapper only records topic, count, age
     and top-level key names first. It is installed once per client -- the
     marker guards a re-install onto a client that was not rebuilt, which
-    would otherwise count every frame twice. `on_subscribe` watches for the
-    wildcard's SUBACK and, on a grant, unsubscribes the three guessed
-    topics; a refusal is recorded and leaves them alone, so a broker that
-    will not take wildcards costs nothing that worked before.
+    would otherwise count every frame twice. `subscribe` is wrapped so every
+    mid maps back to its topic, and `on_subscribe` records each SUBACK's
+    verdict by topic -- the SDK's three included; on a wildcard grant it
+    unsubscribes the three guessed topics, on a refusal it tries the next
+    wildcard and, once all are refused, leaves the three alone, so a broker
+    that will not take wildcards costs nothing that worked before.
     """
     client = mqtt.client
     device_ids = [
@@ -448,7 +475,35 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
         for device in runtime.devices
         if getattr(device, "id", None)
     ]
-    pending: dict[int, str] = {}
+    pending = runtime.mqtt_pending_subacks
+    # Wildcards still untried, per device, so a refusal of one tries the
+    # next and the verdict is "refused" only when all have been.
+    remaining: dict[str, list[str]] = {
+        device_id: _vehicle_wildcards(device_id) for device_id in device_ids
+    }
+
+    # EVERY subscribe goes through here, the SDK's own included: the mid is
+    # the only thing that ties a SUBACK back to its topic, and the SDK
+    # throws it away.
+    if not getattr(client.subscribe, "_navimow_census", False):
+        # A fresh client restarts its mids; nothing outstanding can still
+        # be answered.
+        pending.clear()
+        sdk_subscribe = client.subscribe
+
+        def _subscribe(topic: Any, *args: Any, **kwargs: Any) -> Any:
+            result, mid = sdk_subscribe(topic, *args, **kwargs)
+            names = [topic] if isinstance(topic, str) else [
+                item[0] if isinstance(item, (list, tuple)) else item for item in topic
+            ]
+            for name in names:
+                runtime.mqtt_subscriptions[str(name)] = "sent"
+            if result == 0 and mid is not None:
+                pending[mid] = "\n".join(str(name) for name in names)
+            return result, mid
+
+        _subscribe._navimow_census = True  # type: ignore[attr-defined]
+        client.subscribe = _subscribe
 
     if not getattr(client.on_message, "_navimow_census", False):
         sdk_on_message = client.on_message
@@ -475,29 +530,43 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
         _on_message._navimow_census = True  # type: ignore[attr-defined]
         client.on_message = _on_message
 
-    def _on_subscribe(
-        _client: Any, _userdata: Any, mid: int, granted: Any, *_args: Any
-    ) -> None:
-        topic = pending.pop(mid, None)
-        if topic is None:
-            return
-        codes = list(granted) if isinstance(granted, (list, tuple)) else [granted]
-        refused = any(
-            getattr(code, "is_failure", False)
-            or (isinstance(code, int) and code >= 128)
-            for code in codes
-        )
-        if refused:
+    def _try_next_wildcard(device_id: str) -> None:
+        if not remaining.get(device_id):
             if runtime.mqtt_wildcard_granted is not False:
                 _LOGGER.info(
-                    "Navimow broker refused the vehicle wildcard subscription; "
+                    "Navimow broker refused every vehicle wildcard subscription; "
                     "the topic census sees only the SDK's three guessed topics"
                 )
             runtime.mqtt_wildcard_granted = False
             return
-        runtime.mqtt_wildcard_granted = True
-        device_id = topic[len(VEHICLE_TOPIC_PREFIX):-len("/#")]
-        _client.unsubscribe(_sdk_guessed_topics(device_id))
+        client.subscribe(remaining[device_id].pop(0))
+
+    def _on_subscribe(
+        _client: Any, _userdata: Any, mid: int, granted: Any, *_args: Any
+    ) -> None:
+        joined = pending.pop(mid, None)
+        if joined is None:
+            return
+        topics = joined.split("\n")
+        codes = list(granted) if isinstance(granted, (list, tuple)) else [granted]
+        for index, topic in enumerate(topics):
+            code = codes[index] if index < len(codes) else codes[-1]
+            refused = getattr(code, "is_failure", False) or (
+                isinstance(code, int) and code >= 128
+            )
+            runtime.mqtt_subscriptions[topic] = (
+                "refused" if refused else f"granted qos{int(code)}"
+            )
+            if not topic.startswith(VEHICLE_TOPIC_PREFIX):
+                continue
+            if not (topic.endswith("/#") or topic.endswith("/+")):
+                continue
+            device_id = _wildcard_device_id(topic)
+            if refused:
+                _try_next_wildcard(device_id)
+                continue
+            runtime.mqtt_wildcard_granted = True
+            _client.unsubscribe(_sdk_guessed_topics(device_id))
 
     client.on_subscribe = _on_subscribe
 
@@ -516,12 +585,8 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
         if previous_on_connected is not None:
             await previous_on_connected()
         for device_id in device_ids:
-            topic = _vehicle_wildcard(device_id)
-            result, mid = client.subscribe(topic)
-            if result == 0 and mid is not None:
-                pending[mid] = topic
-            elif runtime.mqtt_wildcard_granted is None:
-                runtime.mqtt_wildcard_granted = False
+            remaining[device_id] = _vehicle_wildcards(device_id)
+            _try_next_wildcard(device_id)
 
     _on_connected_subscribe_wildcard._navimow_census = True  # type: ignore[attr-defined]
     _on_connected_subscribe_wildcard._previous = previous_on_connected  # type: ignore[attr-defined]
