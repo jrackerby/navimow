@@ -345,22 +345,40 @@ def test_each_mqtt_channel_is_counted_separately():
 
 
 def test_reachability_does_not_rest_on_a_frozen_flag():
-    """`device.online` IS READ ONCE AT SETUP AND NEVER REFRESHED.
+    """THERE IS NO `online` FLAG. The raw `authList` device record was read
+    on 2026-09-14 and carries exactly `firmware`, `id`, `model`, `name`;
+    mower_sdk's `Device.online` is `data.get("online", False)` -- its own
+    default, never a vendor reading. Through 1.5.0 that default was read
+    once at setup, printed in the dump, and taken in #7's history as the
+    mower being asleep, which deferred the attributes characterisation for
+    three rounds. A monitor whose blind spot correlates with what it
+    monitors is worse than none; one that reads a constant is not a monitor.
 
-    It therefore cannot move, and it read `off` unbroken through two
-    complete mowing sessions on 2026-09-12 -- a monitor reporting its
-    subject unreachable while the subject was demonstrably working. A
-    monitor whose blind spot correlates with what it monitors is worse than
-    none, and this one's blind spot was then read back as evidence that the
-    mower was asleep, which is what deferred the attributes characterisation
-    for three rounds.
-
-    So the connectivity axis must consult live push evidence, and the dump
-    must print the flag's age and its ambiguity beside it.
+    So the connectivity axis must consult live push evidence, and NOTHING in
+    the component may read `.online` off the device record any more -- not
+    the entities, not the dump.
     """
     binary = source("binary_sensor.py")
     entity = code_only(source("entity.py"))
     diagnostics = source("diagnostics.py")
+    # BY AST, on every module that touches the device record: an Attribute
+    # `.online` or a getattr(..., "online") anywhere is the flag creeping
+    # back, and a substring gate would be satisfied by this very comment.
+    readers = []
+    for name in ("binary_sensor.py", "entity.py", "diagnostics.py",
+                 "__init__.py", "coordinator.py", "sensor.py", "lawn_mower.py"):
+        for node in ast.walk(ast.parse(source(name))):
+            if isinstance(node, ast.Attribute) and node.attr == "online":
+                readers.append(name)
+            elif (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                  and node.func.id == "getattr"
+                  and len(node.args) >= 2
+                  and isinstance(node.args[1], ast.Constant)
+                  and node.args[1].value == "online"):
+                readers.append(name)
+    check(not readers,
+          f"{sorted(set(readers))} read `.online` off the device record -- "
+          "the vendor never sends that key and the value is the SDK's default")
     # BY AST. A substring gate for "mqtt_recent" is satisfied by any one of
     # the three lambdas mentioning it, including the two that ignore it --
     # which is exactly the connectivity axis staying broken while the gate
@@ -378,7 +396,7 @@ def test_reachability_does_not_rest_on_a_frozen_flag():
             ):
                 names = {a.arg for a in node.args.args}
                 passed = {a.id for a in call.args if isinstance(a, ast.Name)}
-                passes_push = bool(names & passed - {"state", "online", "error"})
+                passes_push = bool(names & passed - {"state", "error"})
     check(passes_push,
           "the connectivity lambda does not hand live push evidence to "
           "is_reachable, so the axis still rests on a setup-time flag that "
@@ -389,13 +407,18 @@ def test_reachability_does_not_rest_on_a_frozen_flag():
           "NavimowBinarySensor.is_on never reads the live-push property, so "
           "nothing reaches the lambda that expects it")
     check('"device_record_age_seconds"' in diagnostics,
-          "the dump prints `online` with no age beside it, so a stale "
-          "boolean is indistinguishable from a live one -- and it was read "
-          "as live")
-    check('"online_is_ambiguous"' in diagnostics,
-          "mower_sdk parses this as data.get('online', False), so an absent "
-          "key and a vendor-asserted offline are the same False; a dump that "
-          "does not say so invites the reading that was already made")
+          "the dump prints the once-read device record's fields with no age "
+          "beside them, so a stale field is indistinguishable from a live one")
+    online_keys = sorted({
+        k.value
+        for node in ast.walk(ast.parse(diagnostics)) if isinstance(node, ast.Dict)
+        for k in node.keys
+        if isinstance(k, ast.Constant) and isinstance(k.value, str)
+        and k.value.startswith("online")
+    })
+    check(not online_keys,
+          f"the dump prints {online_keys} -- the vendor never sends `online`, "
+          "so whatever an online-keyed field shows is the SDK's default")
 
 
 def test_a_failed_handshake_is_observed():

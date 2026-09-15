@@ -119,32 +119,34 @@ def test_none_state_is_none():
 # -- reachability -----------------------------------------------------------
 
 def test_reachability_is_a_separate_axis():
-    check(m.is_reachable("unknown", None) is False,
-          "is_reachable('unknown', None) must be False -- that is the offline state")
-    check(m.is_reachable("mowing", None) is True,
-          "a mowing mower with no explicit online flag is reachable")
-    check(m.is_reachable(None, None) is None,
-          "is_reachable(None, None) must be None -- 'we were not told' is not 'offline'")
-    check(m.is_reachable("mowing", True) is True,
-          "an explicit online=True is still positive evidence")
+    check(m.is_reachable("unknown") is False,
+          "is_reachable('unknown') must be False -- that is the offline state")
+    check(m.is_reachable("mowing") is True,
+          "a mowing mower is reachable")
+    check(m.is_reachable(None) is None,
+          "is_reachable(None) must be None -- 'we were not told' is not 'offline'")
 
 
-def test_a_setup_time_false_no_longer_manufactures_offline():
-    """THE REVERSAL, PINNED. `device_online is False` used to outrank every
-    other signal. It cannot any more, and this is the case that forced it:
-    the flag is read once at setup and never refreshed, so it read False
-    unbroken through two complete mowing sessions on 2026-09-12 while the
-    mower was cutting grass. mower_sdk's `data.get("online", False)` also
-    collapses an ABSENT key into the same False, so the value cannot be told
-    apart from silence at this layer.
+def test_reachability_takes_no_online_flag():
+    """THE FLAG IS GONE, AND THE SIGNATURE PINS IT. Through 1.5.0 the second
+    positional argument was `device_online`, off mower_sdk's `Device.online`
+    -- `data.get("online", False)`. The raw `authList` record was read on
+    2026-09-14: keys are exactly `firmware`, `id`, `model`, `name`. The
+    vendor never sends `online`; every False was the SDK default and True
+    was unreachable. So the parameter is deleted, not defaulted: a caller
+    still passing it by name is passing a value that never existed.
     """
+    import inspect
+    params = list(inspect.signature(m.is_reachable).parameters)
+    check(params == ["canonical_state", "mqtt_push_is_recent"],
+          f"is_reachable must take exactly (canonical_state, "
+          f"mqtt_push_is_recent); found {params!r} -- an `online`-shaped "
+          "parameter has crept back in and the vendor never sends one")
     check(m.is_reachable("mowing", False) is True,
-          "a mower reporting 'mowing' must not read unreachable on a "
-          "setup-time online=False -- that flag cannot move and it was "
-          "False through two real mowing sessions")
+          "a mowing mower with no recent push is still reachable -- "
+          "'no push' is not a negative reading")
     check(m.is_reachable("docked", False) is True,
-          "a docked mower with an ambiguous online=False is not a "
-          "reachability finding either")
+          "a docked mower with no recent push is not a reachability finding")
     check(m.is_reachable("unknown", False) is False,
           "'unknown' is still the canonical offline state and still reads off")
 
@@ -153,14 +155,14 @@ def test_a_live_push_outranks_every_stale_signal():
     """A state frame pushed for this device inside the staleness window is
     the cloud saying it is in contact with the mower. Nothing older outranks
     it -- that is the point of preferring it."""
-    check(m.is_reachable("unknown", False, True) is True,
+    check(m.is_reachable("unknown", True) is True,
           "a live push must outrank a stale 'unknown': the cloud is "
           "demonstrably in contact with this mower")
-    check(m.is_reachable(None, None, True) is True,
+    check(m.is_reachable(None, True) is True,
           "a live push is a reading even when nothing else is")
-    check(m.is_reachable(None, None, False) is None,
+    check(m.is_reachable(None, False) is None,
           "no push is not a negative reading -- absence stays None")
-    check(m.is_reachable("mowing", None) is True,
+    check(m.is_reachable("mowing") is True,
           "the push argument is optional and its default changes nothing")
 
 
@@ -398,31 +400,33 @@ def test_the_assertions_can_fail():
     # Prove the restore worked, or every test after this one is meaningless.
     if m.resolve_activity("unknown") is not None:
         FAILURES.append("SELF-TEST FAILED: could not restore CANONICAL_TO_ACTIVITY")
-    # The reachability gate: reinstate the rule that shipped through 1.4.0 --
-    # an explicit online=False outranks everything -- and assert the new
-    # tests trip on it. Without this the reversal is asserted by tests that
-    # have never been shown capable of failing.
+    # The reachability gate: reinstate the 1.5.0 shape -- a `device_online`
+    # second positional that a False can still not manufacture `off` from --
+    # and assert the new tests trip on it. Without this the deletion is
+    # asserted by tests that have never been shown capable of failing.
     before = len(FAILURES)
     original_reachable = m.is_reachable
 
-    def _pre_reversal(state, online, push=None):
-        if state == "unknown":
+    def _pre_deletion(canonical_state, device_online=None, mqtt_push_is_recent=None):
+        if mqtt_push_is_recent:
+            return True
+        if canonical_state == "unknown":
             return False
-        if online is not None:
-            return bool(online)
-        if state is None:
+        if device_online is True:
+            return True
+        if canonical_state is None:
             return None
         return True
 
     try:
-        m.is_reachable = _pre_reversal
-        test_a_setup_time_false_no_longer_manufactures_offline()
+        m.is_reachable = _pre_deletion
+        test_reachability_takes_no_online_flag()
         test_a_live_push_outranks_every_stale_signal()
         if len(FAILURES) == before:
             FAILURES.append(
-                "SELF-TEST FAILED: the pre-reversal is_reachable (online=False "
-                "outranks everything, no push argument) produced NO failure, so "
-                "these gates cannot detect the defect they were written for"
+                "SELF-TEST FAILED: the 1.5.0 is_reachable (device_online second "
+                "positional) produced NO failure, so these gates cannot detect "
+                "the flag creeping back"
             )
         else:
             del FAILURES[before:]

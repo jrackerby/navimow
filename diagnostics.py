@@ -55,20 +55,16 @@ async def async_get_config_entry_diagnostics(
             {
                 "id_present": bool(device_id),
                 "model": coordinator.device.model,
+                # Empty on SDK 0.1.2: the vendor sends `firmware`, the SDK
+                # reads `firmware_version` (measured 2026-09-14, model.py).
                 "firmware_version": coordinator.device.firmware_version,
-                "online": getattr(coordinator.device, "online", None),
-                # `online` IS NOT A LIVE READING AND `False` IS NOT A READING
-                # AT ALL. It comes off the `authList` device record, read once
-                # at setup and never refreshed, and mower_sdk parses it as
-                # `data.get("online", False)` -- so an absent key and a
-                # vendor-asserted offline are the same value here. It reported
-                # `false` unbroken through two complete mowing sessions on
-                # 2026-09-12 and was read, in this issue's own history, as
-                # proof the mower was asleep and therefore that the silence on
-                # `attributes` could not be interpreted. Both facts are printed
-                # beside it so the next reader is not owed the archaeology.
-                "online_is_ambiguous": getattr(coordinator.device, "online", None)
-                is False,
+                # NO `online` KEY IS PRINTED, BECAUSE NONE IS SENT. The raw
+                # `authList` record was read on 2026-09-14 and carries
+                # exactly `firmware`, `id`, `model`, `name`; the SDK's
+                # `Device.online` is its own `False` default and printing it
+                # here was read, in #7's history, as the mower being asleep.
+                # The record's age stays: it is read once, at setup, and
+                # `model`/`firmware_version` above are as old as this says.
                 "device_record_age_seconds": (
                     round(now - runtime.devices_read_monotonic, 1)
                     if runtime.devices_read_monotonic is not None

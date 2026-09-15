@@ -81,8 +81,8 @@ class NavimowRuntimeData:
     mqtt_connect_failures: int = 0
     mqtt_last_connect_failure_monotonic: float | None = None
     # WHEN THE DEVICE RECORD WAS READ, because it is read exactly once and
-    # `online` comes off it. Without an age beside it, a stale boolean in a
-    # dump is indistinguishable from a live one, and it was read as live.
+    # `model`/`name`/`firmware_version` come off it. Without an age beside
+    # them, a stale field in a dump is indistinguishable from a live one.
     devices_read_monotonic: float | None = None
 
 

@@ -95,7 +95,6 @@ def resolve_activity(canonical_state: str | None) -> str | None:
 
 def is_reachable(
     canonical_state: str | None,
-    device_online: bool | None,
     mqtt_push_is_recent: bool | None = None,
 ) -> bool | None:
     """Is the mower itself reachable by the CLOUD?
@@ -108,35 +107,32 @@ def is_reachable(
     silently render as 'offline' -- `ok at zero` and `could not read` are
     different values at the source.
 
-    REVERSAL, LABELLED. Until now an explicit `device_online is False`
-    outranked every other signal and resolved this to `off`. It no longer
-    does, and `False` is treated as no signal at all. Two measurements
-    force it:
+    THERE IS NO `online` FLAG, AND THIS AXIS NO LONGER TAKES ONE. Through
+    1.5.0 a `device_online` argument came off the `authList` device record
+    via mower_sdk's `Device.online`. That SDK field is
+    `data.get("online", False)`, and the raw record was read on 2026-09-14
+    (shape only, through the same host-side probe that cracked the MQTT
+    endpoint): it carries exactly four keys -- `firmware`, `id`, `model`,
+    `name`. The vendor never sends `online`. Every `False` the component ever
+    read off it was the SDK's own default, and `True` was unreachable, so the
+    argument carried no information in either direction and is deleted
+    rather than kept "for the True case". (The same read shows the vendor's
+    firmware key is `firmware`, which the SDK does not map -- that is why
+    `Device.firmware_version` is always empty.)
 
-      * `device_online` is READ ONCE, at setup, off the `authList` device
-        record, and is never refreshed for the life of the entry. It cannot
-        move, so it reported `off` unbroken across two complete mowing
-        sessions on 2026-09-12 -- a mower cutting grass while the entity
-        said the cloud could not see it.
-      * mower_sdk's `Device.from_dict` is `data.get("online", False)`, so an
-        ABSENT key and a vendor-asserted offline arrive here as the same
-        `False`. Name the benign state that produces the same output: this
-        one is indistinguishable at this layer, which makes `False`
-        unusable as evidence. `True` stays usable -- an absent key can
-        never produce it.
+    History, for the recorder: the flag read `off` unbroken through two
+    complete mowing sessions on 2026-09-12, and that reading was taken in
+    #7's history as proof the mower was asleep. It was a default.
 
-    So reachability is now ASSERTED from live evidence and denied only from
-    a reading that means it: a state frame pushed for this device inside the
+    Reachability is ASSERTED from live evidence and denied only from a
+    reading that means it: a state frame pushed for this device inside the
     staleness window is the cloud telling us it is in contact with the mower,
-    and `unknown` is the canonical offline state. `False` on its own no
-    longer manufactures an `off`.
+    and `unknown` is the canonical offline state.
     """
     if mqtt_push_is_recent:
         return True
     if canonical_state == "unknown":
         return False
-    if device_online is True:
-        return True
     if canonical_state is None:
         return None
     return True

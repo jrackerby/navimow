@@ -52,6 +52,9 @@ class NavimowEntity(CoordinatorEntity[NavimowCoordinator]):
             name=device.name,
             manufacturer="Navimow",
             model=device.model or None,
+            # ALWAYS None ON 0.1.2: the vendor's key is `firmware`, the SDK
+            # reads `firmware_version` (measured 2026-09-14, model.py). Left
+            # in place so a fixed SDK lights it up without a change here.
             sw_version=device.firmware_version or None,
             serial_number=device.serial_number or device.id,
             connections=(
@@ -76,17 +79,6 @@ class NavimowEntity(CoordinatorEntity[NavimowCoordinator]):
     def _canonical_state(self) -> str | None:
         state = self._state
         return state.state if state is not None else None
-
-    @property
-    def _device_online(self) -> bool | None:
-        """The `authList` flag, read ONCE at setup and never refreshed.
-
-        Kept because `True` is still usable evidence, but it is a setup-time
-        reading, not a live one -- model.is_reachable carries the measurement
-        that forced that distinction.
-        """
-        device = self.coordinator.device
-        return getattr(device, "online", None)
 
     @property
     def _mqtt_push_is_recent(self) -> bool:
