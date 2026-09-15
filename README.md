@@ -50,7 +50,9 @@ subscribes a third MQTT topic it never listened to:
 - **`error`, `position`, `signal_strength`, `mowing_time`,
   `total_mowing_time` and `online` were attributes**, where the recorder keeps
   no series, statistics cannot reach them and no automation can trigger on
-  them.
+  them. (`online` turned out to be nothing at all: the vendor's `authList`
+  record has no such key, and the value was the SDK's default -- see
+  `model.is_reachable`.)
 - **The MQTT password was logged at INFO** on every setup, masked as
   `first2***last2` — four real characters of a live secret. Nothing derived
   from a credential is logged by this component at any level, and
