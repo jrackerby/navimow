@@ -454,8 +454,8 @@ def test_the_vehicle_namespace_is_enumerated_not_guessed():
     `attributes` never said whether the channel is quiet or does not exist.
     The component takes the whole `/downlink/vehicle/<id>/#` namespace,
     counts every frame by the topic it arrived on with its payload key names,
-    drops the SDK's three once the wildcard is granted (a broker may deliver
-    one copy per matching subscription), and prints the census in
+    keeps the SDK's three beside it and drops a byte-identical second copy
+    (a broker may deliver one per matching subscription), and prints the census in
     diagnostics -- names only, never a value."""
     raw = source("__init__.py")
     init = code_only(raw)
@@ -474,9 +474,13 @@ def test_the_vehicle_namespace_is_enumerated_not_guessed():
           "diagnostics.py never prints the per-topic SUBACK verdicts")
     check('realtimeDate/+"' in raw,
           "__init__.py tries no single-level wildcard after `#` is refused")
-    check(".unsubscribe(" in init,
-          "__init__.py never drops the SDK's guessed topics after the wildcard "
-          "is granted; overlapping subscriptions can double every frame count")
+    check(".unsubscribe(" not in init,
+          "__init__.py unsubscribes the SDK's guessed topics; a wildcard grant "
+          "is not proof the gateway routes wildcard matches, and the entity "
+          "would go blind on MQTT if it does not")
+    check("DUPLICATE_WINDOW_SECONDS" in init and '"duplicates"' in diagnostics,
+          "overlapping subscriptions are kept but nothing gates a second copy "
+          "of the same frame, so mqtt_frames can read double")
     check("._navimow_census = True" in init
           and 'getattr(client.on_message, "_navimow_census"' in raw,
           "the on_message wrapper is not marked and guarded, so a re-install "

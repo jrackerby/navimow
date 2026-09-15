@@ -422,16 +422,21 @@ def _install_session_observers(
 
 
 # The three topics navimow-sdk subscribes on every CONNACK. They are its
-# guess at the vendor's namespace, and the wildcard below covers all three,
-# so once the broker grants the wildcard they are dropped: a broker MAY
-# deliver one copy per matching subscription, and a second copy of every
-# `state` frame would inflate `mqtt_frames` -- the instrument that proved
-# the session live -- by exactly two.
-SDK_GUESSED_CHANNELS: tuple[str, ...] = ("state", "event", "attributes")
+# guess at the vendor's namespace, and the wildcard below covers all three.
+# THEY ARE NOT UNSUBSCRIBED when the wildcard is granted: a gateway can
+# answer a wildcard SUBACK with a grant and still route only exact matches,
+# and v1.6.1 measured six minutes of a live mowing session with the three
+# dropped and not one frame over `realtimeDate/+` -- too short to convict
+# the wildcard, long enough to refuse to bet the entity on it. Both stay
+# subscribed; a broker that delivers one copy per matching subscription is
+# handled by the duplicate gate in the census wrapper instead.
 VEHICLE_TOPIC_PREFIX: str = "/downlink/vehicle/"
+# A broker delivering two copies of one publish does so back to back; a real
+# repeat of the same payload from the mower is seconds apart at the least.
+DUPLICATE_WINDOW_SECONDS: float = 0.5
 
 
-# Tried in order; the first one granted narrows the SDK's three away. `#`
+# Tried in order; the census listens on the first one granted. `#`
 # was refused by the live broker (v1.6.0's first dump), so the single-level
 # `realtimeDate/+` is the fallback: it still covers the three and answers
 # whether the ACL is on the depth or on the whole namespace.
@@ -447,13 +452,6 @@ def _wildcard_device_id(topic: str) -> str:
     return rest.split("/", 1)[0]
 
 
-def _sdk_guessed_topics(device_id: str) -> list[str]:
-    return [
-        f"{VEHICLE_TOPIC_PREFIX}{device_id}/realtimeDate/{channel}"
-        for channel in SDK_GUESSED_CHANNELS
-    ]
-
-
 def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
     """Listen to the vehicle's whole namespace and count what arrives, by topic.
 
@@ -464,10 +462,10 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
     marker guards a re-install onto a client that was not rebuilt, which
     would otherwise count every frame twice. `subscribe` is wrapped so every
     mid maps back to its topic, and `on_subscribe` records each SUBACK's
-    verdict by topic -- the SDK's three included; on a wildcard grant it
-    unsubscribes the three guessed topics, on a refusal it tries the next
-    wildcard and, once all are refused, leaves the three alone, so a broker
-    that will not take wildcards costs nothing that worked before.
+    verdict by topic -- the SDK's three included; on a refusal it tries the next
+    wildcard. The three guessed topics stay subscribed either way -- the
+    module comment above VEHICLE_TOPIC_PREFIX says why -- so nothing that
+    worked before this census is bet on the wildcard.
     """
     client = mqtt.client
     device_ids = [
@@ -508,12 +506,28 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
     if not getattr(client.on_message, "_navimow_census", False):
         sdk_on_message = client.on_message
 
+        last_frame: dict[str, Any] = {"key": None, "monotonic": 0.0}
+
         def _on_message(_client: Any, _userdata: Any, msg: Any) -> None:
             record = runtime.mqtt_topic_census.setdefault(
-                msg.topic, {"frames": 0, "last_monotonic": None, "keys": set()}
+                msg.topic,
+                {"frames": 0, "duplicates": 0, "last_monotonic": None, "keys": set()},
             )
+            now = time.monotonic()
+            # ONE COPY PER MATCHING SUBSCRIPTION is what MQTT 3.1.1 lets a
+            # broker do (3.3.5), and the explicit topic and the wildcard both
+            # match every frame. A second copy is byte-identical and arrives
+            # on the same topic within the same delivery; it is counted, so
+            # the dump says which kind of broker this is, and NOT forwarded,
+            # so neither the SDK's cache nor `mqtt_frames` sees it twice.
+            key = (msg.topic, bytes(msg.payload or b""))
+            if key == last_frame["key"] and now - last_frame["monotonic"] < DUPLICATE_WINDOW_SECONDS:
+                record["duplicates"] += 1
+                return
+            last_frame["key"] = key
+            last_frame["monotonic"] = now
             record["frames"] += 1
-            record["last_monotonic"] = time.monotonic()
+            record["last_monotonic"] = now
             try:
                 payload = json.loads((msg.payload or b"").decode("utf-8"))
             except (ValueError, UnicodeDecodeError):
@@ -566,7 +580,6 @@ def _install_topic_census(runtime: NavimowRuntimeData, mqtt: Any) -> None:
                 _try_next_wildcard(device_id)
                 continue
             runtime.mqtt_wildcard_granted = True
-            _client.unsubscribe(_sdk_guessed_topics(device_id))
 
     client.on_subscribe = _on_subscribe
 
