@@ -55,4 +55,9 @@ class NavimowStopButton(NavimowEntity, ButtonEntity):
             raise HomeAssistantError(
                 f"Navimow refused stop for {self.coordinator.device.name}: {err}"
             ) from err
-        await self.coordinator.async_request_refresh()
+        # THE SAME DEFECT LIVED HERE TOO. #28 named lawn_mower's `_async_command`,
+        # but STOP is a command on the same cloud with the same follow-up read,
+        # and a plain `async_request_refresh()` is refused by the coordinator's
+        # HTTP fallback gates exactly as it was there. Fixing one of two
+        # identical paths is a fix that works on one instance.
+        await self.coordinator.async_request_command_refresh()

@@ -505,6 +505,167 @@ def test_the_vehicle_namespace_is_enumerated_not_guessed():
           "diagnostics.py prints census topics with the vehicle serial in them")
 
 
+COMMAND_FILES = ("lawn_mower.py", "button.py")
+
+
+def _plain_refresh_callers(body):
+    """Files calling `coordinator.async_request_refresh()` by AST.
+
+    By AST rather than by substring, because `async_request_command_refresh`
+    CONTAINS `async_request_refresh` as a substring and a text gate would
+    read the fix as the defect. The attribute name is compared whole.
+    """
+    found = []
+    for node in ast.walk(ast.parse(body)):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "async_request_refresh"):
+            found.append(node.lineno)
+    return found
+
+
+def test_a_command_forces_the_next_http_read():
+    """#28: THE FOLLOW-UP REFRESH WAS A NO-OP INSIDE THE FALLBACK GATES.
+
+    Measured 2026-09-15: a start accepted at 10:08 left the entity on `docked`
+    until 10:16, when a config-entry reload forced a fresh HTTP read. The
+    refresh each command schedules had run; `_async_update_data` refused the
+    read because `HTTP_FALLBACK_MIN_INTERVAL` had not elapsed -- and would
+    have refused it anyway for five minutes because MQTT was not yet stale.
+
+    So: no command path may call the plain refresh, the coordinator must
+    expose one that marks the owed read, and the mark must be CONSUMED --
+    a flag that is set and never cleared turns the fallback into a poll, which
+    is the thing the floor exists to prevent.
+    """
+    coordinator = source("coordinator.py")
+    coordinator_code = code_only(coordinator)
+    check("async def async_request_command_refresh(" in coordinator_code,
+          "the coordinator exposes no command refresh, so a command can only "
+          "call the plain one and be refused by its own fallback gates")
+    check("should_http_fetch(" in coordinator_code,
+          "coordinator.py does not call model.should_http_fetch -- the gate "
+          "decision is back inline where no suite without Home Assistant "
+          "installed can reach it")
+
+    # Set AND cleared, by AST on the attribute assignment itself.
+    assigned = {}
+    for node in ast.walk(ast.parse(coordinator)):
+        if not isinstance(node, ast.Assign):
+            continue
+        for target in node.targets:
+            if (isinstance(target, ast.Attribute)
+                    and target.attr == "_force_http_fetch"
+                    and isinstance(node.value, ast.Constant)):
+                assigned[node.value.value] = assigned.get(node.value.value, 0) + 1
+    check(assigned.get(True), "nothing ever sets _force_http_fetch True, so no "
+                              "command can mark a read as owed")
+    check(assigned.get(False), "nothing ever sets _force_http_fetch False, so "
+                               "one command turns the hourly fallback into a "
+                               "poll for the life of the entry")
+
+    for name in COMMAND_FILES:
+        body = source(name)
+        lines = _plain_refresh_callers(body)
+        check(not lines,
+              f"{name} calls the plain async_request_refresh() at line(s) "
+              f"{lines} -- the coordinator's fallback gates refuse that read, "
+              "so the command's follow-up is a no-op for up to an hour")
+        check("async_request_command_refresh(" in code_only(body),
+              f"{name} issues a command and never asks for the forced read; "
+              "the entity then sits on a stale activity until the next poll")
+
+    # The dump has to be able to SHOW a forced read happened.
+    check("seconds_since_http_fetch" in source("diagnostics.py"),
+          "diagnostics.py never reports the age of the last HTTP read, so a "
+          "dump cannot tell a forced fetch from a gate that swallowed one")
+
+
+def _reads_key(tree, key):
+    """Is `<something>.get("<key>")` or `<something>["<key>"]` in this tree?"""
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute)
+                and node.func.attr == "get" and node.args
+                and isinstance(node.args[0], ast.Constant)
+                and node.args[0].value == key):
+            return True
+        if (isinstance(node, ast.Subscript)
+                and isinstance(node.slice, ast.Constant)
+                and node.slice.value == key):
+            return True
+    return False
+
+
+def _guarded_getattr(tree, name):
+    """Is `getattr(<x>, "<name>", <default>)` in this tree?
+
+    The three-argument form specifically: `getattr(x, "y")` raises on a
+    missing attribute and is not a guard at all.
+    """
+    for node in ast.walk(tree):
+        if (isinstance(node, ast.Call) and isinstance(node.func, ast.Name)
+                and node.func.id == "getattr" and len(node.args) == 3
+                and isinstance(node.args[1], ast.Constant)
+                and node.args[1].value == name):
+            return True
+    return False
+
+
+def test_the_firmware_version_comes_off_the_vendor_s_own_key():
+    """#24: THE SDK READS A KEY THE VENDOR DOES NOT SEND.
+
+    `Device.from_dict` reads `data.get("firmware_version", "")` at 0.1.2; the
+    raw `authList` record carries exactly `firmware`, `id`, `model`, `name`
+    (read 2026-09-14, #22). `MowerAPI.async_get_devices` returns parsed
+    objects and drops the response, so the value is unrecoverable downstream
+    and `sw_version` is permanently blank.
+
+    The fix reads the one call itself and fills the SDK's OWN field, so
+    `device.firmware_version` stays the single accessor -- a config key read
+    by two code paths goes through one accessor, and a second field beside it
+    would be the second path.
+    """
+    init = source("__init__.py")
+    init_code = code_only(init)
+    check("async def _async_read_devices(" in init_code,
+          "__init__.py has no raw authList read, so firmware_version is "
+          "whatever the SDK's absent-key default left behind")
+    check("AUTH_LIST_ENDPOINT" in init_code and "AUTH_LIST_ENDPOINT" in source("const.py"),
+          "the authList endpoint is not a named constant; the path the raw "
+          "read uses must be readable beside the SDK's own")
+    # BY AST, NOT OVER code_only(): the two strings that matter here ARE
+    # string literals, and code_only() strips those along with the comments.
+    # A raw-text gate would instead be satisfied by this very docstring.
+    init_tree = ast.parse(init)
+    check(_reads_key(init_tree, "firmware"),
+          "__init__.py never reads the vendor's `firmware` key off the raw "
+          "record -- the one key the raw read exists for")
+    check("firmware_version" in init_code,
+          "__init__.py reads the vendor key without writing the SDK's field, "
+          "so every consumer still sees the empty default")
+
+    # The private reach must be guarded, not assumed: an SDK that renames
+    # _async_request must not take setup down over a cosmetic field.
+    check(_guarded_getattr(init_tree, "_async_request"),
+          "__init__.py reaches api._async_request without a getattr guard "
+          "carrying a default; a rename in the SDK would fail setup entirely "
+          "over the firmware field")
+    check("async_get_devices()" in init_code,
+          "there is no fallback to the SDK's public parsed-only read, so the "
+          "guard above has nowhere to fall back to")
+
+    # ONE accessor. entity.py and diagnostics.py must both still read the
+    # SDK's field rather than a parallel one this component invented.
+    for name in ("entity.py", "diagnostics.py"):
+        check("firmware_version" in code_only(source(name)),
+              f"{name} no longer reads device.firmware_version -- the point "
+              "of writing the SDK's own field is that nothing downstream "
+              "needs a second accessor")
+    check('"firmware_source"' in source("diagnostics.py"),
+          "the dump reports firmware_version with nothing saying which key "
+          "supplied it; an empty value then has three causes and no way to "
+          "tell them apart")
+
+
 def test_the_brand_assets_exist_and_meet_core_s_sizes():
     """Core 2026.3+ serves a custom integration's OWN brand/ directory.
 
@@ -835,6 +996,64 @@ def test_the_assertions_can_fail():
     if "is_connected" not in "runtime.sdk.is_connected":
         FAILURES.append(
             "SELF-TEST FAILED: the mqtt-session gate cannot see is_connected"
+        )
+    # The command-refresh gate is the one that MUST NOT be a substring check:
+    # `async_request_command_refresh` contains `async_request_refresh`, so a
+    # text gate reads the fix as the defect and a text gate for the defect
+    # reads the fix as present. Prove the AST walker splits them.
+    if _plain_refresh_callers("await self.coordinator.async_request_refresh()\n") == []:
+        FAILURES.append(
+            "SELF-TEST FAILED: the plain-refresh walker does not see a call to "
+            "async_request_refresh, so it cannot refuse the no-op #28 measured"
+        )
+    if _plain_refresh_callers(
+        "await self.coordinator.async_request_command_refresh()\n"
+    ) != []:
+        FAILURES.append(
+            "SELF-TEST FAILED: the plain-refresh walker fires on the COMMAND "
+            "refresh, so it would fail every correct command path"
+        )
+    # And the consumed-mark walker: a file that only ever sets it True must
+    # trip, or the gate passes over a flag that is never cleared.
+    only_set = ast.parse("self._force_http_fetch = True\n")
+    cleared = [
+        node for node in ast.walk(only_set)
+        if isinstance(node, ast.Assign)
+        and isinstance(node.targets[0], ast.Attribute)
+        and node.targets[0].attr == "_force_http_fetch"
+        and isinstance(node.value, ast.Constant)
+        and node.value.value is False
+    ]
+    if cleared:
+        FAILURES.append(
+            "SELF-TEST FAILED: the consumed-mark walker finds a False "
+            "assignment in a file that contains only a True one"
+        )
+    # The firmware gates read string LITERALS, which code_only() strips -- so
+    # they run over the raw tree, where a docstring naming the key would
+    # satisfy a text gate. Prove both walkers see the real form and not the
+    # prose.
+    if not _reads_key(ast.parse('record.get("firmware")\n'), "firmware"):
+        FAILURES.append(
+            "SELF-TEST FAILED: the vendor-key walker cannot see "
+            'record.get("firmware"), the exact form it exists to require'
+        )
+    if _reads_key(ast.parse('"""a docstring naming firmware"""\n'), "firmware"):
+        FAILURES.append(
+            "SELF-TEST FAILED: the vendor-key walker is satisfied by prose "
+            "that merely names the key"
+        )
+    if not _guarded_getattr(
+        ast.parse('getattr(api, "_async_request", None)\n'), "_async_request"
+    ):
+        FAILURES.append(
+            "SELF-TEST FAILED: the guard walker cannot see a three-argument "
+            "getattr, so it would refuse every correctly guarded reach"
+        )
+    if _guarded_getattr(ast.parse('getattr(api, "_async_request")\n'), "_async_request"):
+        FAILURES.append(
+            "SELF-TEST FAILED: the guard walker accepts a two-argument "
+            "getattr, which raises rather than guarding"
         )
     # The SDK log filter must be able to PASS something and to DROP
     # something, or its gate reads green over a filter that returns a

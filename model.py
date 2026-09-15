@@ -199,6 +199,51 @@ def is_problem(error: dict | None, canonical_state: str | None) -> bool | None:
 
 
 # --------------------------------------------------------------------------
+# HTTP fallback gating
+# --------------------------------------------------------------------------
+
+
+def should_http_fetch(
+    forced: bool,
+    mqtt_is_stale: bool,
+    seconds_since_http_fetch: float | None,
+    min_interval: float,
+) -> bool:
+    """Should this refresh pay for a REST status read?
+
+    TWO GATES STAND BETWEEN A REFRESH AND A READ, AND A COMMAND HAS TO CLEAR
+    BOTH. The unattended poll is rate-limited by `min_interval` so a broker
+    outage cannot turn the fallback into a poll of its own, and it is skipped
+    entirely while MQTT is fresh because a pushed state is the better reading.
+    Both are correct for the poll and both are wrong for the refresh a command
+    schedules behind it:
+
+      * The hourly floor made that refresh a no-op for up to an hour.
+        Measured 2026-09-15: `lawn_mower.start_mowing` at 10:08 EDT was
+        accepted, the mower left the dock, and the entity read `docked` until
+        a config-entry reload forced a fresh read at 10:16.
+      * The staleness gate closes it for the first five minutes after any
+        frame on any channel -- which is precisely the window the follow-up
+        refresh runs in. Clearing only the floor would have left the same
+        symptom behind a different gate.
+
+    So `forced` clears both, once, and prices itself honestly: one extra REST
+    call per user action, and nothing changes for the unattended poll. The
+    forced read still stamps `min_interval`'s clock, because it IS an HTTP
+    read and the floor exists to protect the cloud from us, not to protect us
+    from the floor.
+
+    `seconds_since_http_fetch` is None -- never 0 -- when no read has ever been
+    taken: never-fetched and just-fetched are opposite answers here.
+    """
+    if forced:
+        return True
+    if not mqtt_is_stale:
+        return False
+    return seconds_since_http_fetch is None or seconds_since_http_fetch > min_interval
+
+
+# --------------------------------------------------------------------------
 # Events (the MQTT channel NavimowHA never subscribed a callback to)
 # --------------------------------------------------------------------------
 

@@ -28,6 +28,18 @@ CLIENT_ID: Final = "homeassistant"
 CLIENT_SECRET: Final = "57056e15-722e-42be-bbaa-b0cbfb208a52"
 API_BASE_URL: Final = "https://navimow-fra.ninebot.com"
 
+# THE ONE ENDPOINT THIS COMPONENT CALLS ITSELF RATHER THAN THROUGH THE SDK.
+# navimow-sdk's `MowerAPI.async_get_devices` GETs this path and hands every
+# record to `Device.from_dict`, which reads `firmware_version` -- a key the
+# vendor does not send. The raw record carries exactly `firmware`, `id`,
+# `model`, `name` (read 2026-09-14, #22), so the parsed object's
+# `firmware_version` is permanently "" and nothing downstream can recover it:
+# the SDK returns parsed objects only. `__init__._async_read_devices` takes
+# this one call itself and reads both off the same response. Verbatim the
+# SDK's own path at 0.1.2; a divergence surfaces as the `code != 1` refusal
+# that function raises, not as a silent empty list.
+AUTH_LIST_ENDPOINT: Final = "/openapi/smarthome/authList"
+
 # THE BRAND MARK, SERVED BY HOME ASSISTANT ITSELF, NOT BY US AND NOT BY A CDN.
 # Since core 2026.3 a custom integration ships its own brand images in a
 # `brand/` directory and core proxies them at this path -- so this needs no

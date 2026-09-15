@@ -38,6 +38,7 @@ from .const import (
     MQTT_STALE_SECONDS,
     UPDATE_INTERVAL_SECONDS,
 )
+from .model import should_http_fetch
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -101,6 +102,11 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self._cache_pickups: dict[str, int] = {"state": 0, "attributes": 0}
         self._last_http_fetch: float | None = None
         self._last_data_source: str | None = None
+        # ONE READ OWED TO A COMMAND. Set by async_request_command_refresh and
+        # consumed by the next _async_update_data whatever else it decides;
+        # model.should_http_fetch carries why a command has to clear both
+        # fallback gates rather than just the hourly one.
+        self._force_http_fetch = False
 
         # log-when-unavailable (Silver). Deduped on a STABLE CONDITION TOKEN,
         # never on the rendered message: a once-only log keyed on its own
@@ -182,6 +188,26 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
         self.api.set_token(access_token)
         return access_token
 
+    # -- commands ---------------------------------------------------------
+
+    async def async_request_command_refresh(self) -> None:
+        """Refresh after a command, past both HTTP fallback gates.
+
+        PUBLIC, AND THE ONLY REFRESH A COMMAND MAY CALL. Plain
+        `async_request_refresh()` reaches `_async_update_data` and is then
+        refused by the same two gates that protect the unattended poll, so the
+        belt-and-braces read every command path schedules was a no-op for up
+        to an hour whenever push went quiet. model.should_http_fetch carries
+        the measurement.
+
+        The debouncer is deliberately left in place: two commands inside its
+        cooldown coalesce into one refresh, which is one forced read for both
+        and is the right answer -- the mark is a boolean owed read, not a
+        queue.
+        """
+        self._force_http_fetch = True
+        await self.async_request_refresh()
+
     # -- readings ---------------------------------------------------------
 
     def _build_data(self) -> dict[str, Any]:
@@ -214,12 +240,24 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             self._last_mqtt_update is None
             or now - self._last_mqtt_update > MQTT_STALE_SECONDS
         )
-        may_fetch = (
-            self._last_http_fetch is None
-            or now - self._last_http_fetch > HTTP_FALLBACK_MIN_INTERVAL
-        )
+        # CONSUMED HERE, UNCONDITIONALLY, AND NOT RESTORED ON FAILURE. The
+        # mark is cleared before the read is attempted so a cloud that is
+        # refusing status reads cannot leave a command's forced fetch standing
+        # and turn every subsequent poll into one -- which is the exact
+        # behaviour the hourly floor exists to prevent. A read that fails does
+        # not stamp `_last_http_fetch` either, so the ordinary gate lets the
+        # next stale poll retry on its own terms.
+        forced = self._force_http_fetch
+        self._force_http_fetch = False
 
-        if mqtt_stale and may_fetch:
+        if should_http_fetch(
+            forced=forced,
+            mqtt_is_stale=mqtt_stale,
+            seconds_since_http_fetch=(
+                None if self._last_http_fetch is None else now - self._last_http_fetch
+            ),
+            min_interval=HTTP_FALLBACK_MIN_INTERVAL,
+        ):
             try:
                 status = await self.api.async_get_device_status(self.device.id)
             except ConfigEntryAuthFailed:
@@ -325,6 +363,21 @@ class NavimowCoordinator(DataUpdateCoordinator[dict[str, Any]]):
             channel: (round(current - last, 1) if last is not None else None)
             for channel, last in self._frame_last.items()
         }
+
+    def seconds_since_http_fetch(self, now: float | None = None) -> float | None:
+        """Seconds since the last SUCCESSFUL HTTP status read, or None if never.
+
+        None, never 0, for the same reason the per-channel frame ages are:
+        never-fetched and just-fetched are opposite findings. It is also the
+        only figure that says when the hourly floor next opens, which is what
+        a dump taken after a command needs in order to tell a forced read
+        (`source: http_fallback` with a small age) from a gate that swallowed
+        one.
+        """
+        if self._last_http_fetch is None:
+            return None
+        current = time.monotonic() if now is None else now
+        return round(current - self._last_http_fetch, 1)
 
     def mqtt_push_is_recent(self, now: float | None = None) -> bool:
         """Has the cloud pushed a STATE frame for this device recently?

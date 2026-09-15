@@ -36,6 +36,7 @@ from homeassistant.helpers.typing import ConfigType
 
 from .const import (
     API_BASE_URL,
+    AUTH_LIST_ENDPOINT,
     CLIENT_ID,
     CLIENT_SECRET,
     DOMAIN,
@@ -85,6 +86,15 @@ class NavimowRuntimeData:
     # `model`/`name`/`firmware_version` come off it. Without an age beside
     # them, a stale field in a dump is indistinguishable from a live one.
     devices_read_monotonic: float | None = None
+    # WHICH KEY SUPPLIED EACH DEVICE'S FIRMWARE, by device id. An empty
+    # `firmware_version` in a dump has three causes -- the vendor stopped
+    # sending its key, the SDK's private request path moved under us, or the
+    # mower genuinely reports none -- and they need opposite fixes. Values:
+    # "sdk" (a fixed SDK finally maps it), "vendor_firmware_key" (this
+    # component read `firmware` off the raw record), "absent" (the record
+    # carried neither), or no entry at all (the raw read was not available and
+    # the parsed-only path ran). `_async_read_devices` sets it.
+    device_firmware_source: dict[str, str] = field(default_factory=dict)
     # WHAT THE BROKER ACTUALLY PUBLISHES FOR THIS VEHICLE, per topic. The
     # SDK subscribes three topics it GUESSED (`realtimeDate/state`, `event`,
     # `attributes` -- its topic helpers still carry the author's own TODO
@@ -202,7 +212,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
 
     # CHANNEL ONE, exercised: an authenticated REST call.
     try:
-        devices = await api.async_get_devices()
+        devices, firmware_source = await _async_read_devices(api)
     except MowerAPIError as err:
         raise ConfigEntryNotReady(f"Navimow device list unavailable: {err}") from err
     except Exception as err:  # noqa: BLE001
@@ -238,6 +248,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: NavimowConfigEntry) -> b
         api=api,
         devices=devices,
         devices_read_monotonic=time.monotonic(),
+        device_firmware_source=firmware_source,
         mqtt_broker=broker,
         mqtt_port=port,
         mqtt_transport="websocket" if ws_path else "tcp",
@@ -367,6 +378,74 @@ def _install_credential_refresh(
     # is the line to move; the manifest pins >=0.1.2 and this is the private
     # surface that pin is really protecting.
     sdk._mqtt.on_disconnected = _on_disconnected
+
+
+async def _async_read_devices(api: Any) -> tuple[list[Any], dict[str, str]]:
+    """authList, read ONCE, parsed twice: the SDK's `Device` and the vendor's key.
+
+    WHY THIS EXISTS. The vendor's device record carries `firmware`; the SDK's
+    `Device.from_dict` reads `data.get("firmware_version", "")` (0.1.2,
+    verbatim). So every `Device` the SDK hands back has an empty
+    `firmware_version`, the device row's `sw_version` is permanently blank,
+    and nothing downstream can recover it -- `MowerAPI.async_get_devices`
+    returns parsed objects and drops the response they came from. An SDK
+    release that maps the key is the upstream fix and has no ETA; this is the
+    dozen lines that do not wait for it.
+
+    THE RECORD IS PARSED BY THE SDK, NOT BY US. `Device.from_dict` still does
+    every field, so a vendor key this component has never heard of keeps
+    arriving the day the SDK learns it. The only thing read here directly is
+    the one key the SDK demonstrably drops, and it is written into the SDK's
+    OWN field rather than carried beside it: `device.firmware_version` stays
+    the single accessor for every consumer (entity.py's `sw_version`,
+    diagnostics), so a fixed SDK lights the same field up and this branch
+    simply stops firing -- recorded as "sdk" in the returned map.
+
+    THE PRIVATE REACH IS GUARDED RATHER THAN ASSUMED. `_async_request` is the
+    SDK's private, and the same pin that protects `sdk._mqtt` protects it.
+    A rename must not take setup down over a cosmetic field, so its absence
+    falls back to the public parsed-only read and says so by returning no
+    source for any device -- which the dump prints.
+    """
+    from mower_sdk.errors import MowerAPIError
+    from mower_sdk.models import Device
+
+    request = getattr(api, "_async_request", None)
+    if request is None:
+        _LOGGER.debug(
+            "navimow-sdk has no _async_request; reading the device list "
+            "through the public parsed-only path and leaving firmware empty"
+        )
+        return await api.async_get_devices(), {}
+
+    response = await request("GET", AUTH_LIST_ENDPOINT)
+    # The SDK's own contract for this endpoint. Kept, because without it a
+    # refusal carrying an error body reads as an account with no mower.
+    if not isinstance(response, dict) or response.get("code") != 1:
+        raise MowerAPIError(
+            "Navimow refused the device list: "
+            f"{response.get('desc') if isinstance(response, dict) else response!r}"
+        )
+    payload = (response.get("data") or {}).get("payload") or {}
+    records = payload.get("devices") or []
+
+    devices: list[Any] = []
+    firmware_source: dict[str, str] = {}
+    for record in records:
+        if not isinstance(record, dict):
+            continue
+        device = Device.from_dict(record)
+        if device.firmware_version:
+            source = "sdk"
+        elif record.get("firmware"):
+            device.firmware_version = str(record["firmware"])
+            source = "vendor_firmware_key"
+        else:
+            source = "absent"
+        devices.append(device)
+        if device.id:
+            firmware_source[device.id] = source
+    return devices, firmware_source
 
 
 def _mask_user_id(path: str | None, user_id: object) -> str | None:
